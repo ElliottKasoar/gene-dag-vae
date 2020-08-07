@@ -110,6 +110,7 @@ import os.path
 from os import path
 
 def main():
+	print ('Running load.py')
 	adata = load_data()
 	debug_data(adata)
 	save_h5ad(adata, 'raw')
