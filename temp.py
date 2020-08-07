@@ -1,4 +1,5 @@
 # temporary file to practice using adata, plots, preprocessing
+# preprocessing to remove technical errors
 
 from load import save_h5ad, load_h5ad
 #from load import adata
@@ -160,7 +161,13 @@ def preprocessData(adata):
 
 	plotHighestExprGenes(adata)
 
+	'''
+	print (f'About to filter the cells: {adata.obs.keys()}')
 	sc.pp.filter_cells(adata, min_genes=200)
+	print (f'After filtering the cells: {adata.obs.keys()}')
+	'''
+	adata = adata[adata.obs.n_genes_expressed > 200, :]
+
 	sc.pp.filter_genes(adata, min_cells=3)
 
 	print (adata)
@@ -267,6 +274,10 @@ def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, p
 
 
 
+
+
+preprocessData(adata)
+
 display ({'adata.X':adata.X,
 	'adata.var':adata.var,
 	'adata.obs':adata.obs,
@@ -275,7 +286,6 @@ display ({'adata.X':adata.X,
 
 examine_adata (adata)
 
-preprocessData(adata)
 #plotPCA(adata, listVariables=['n_counts'])		# need to revit this
 
 
