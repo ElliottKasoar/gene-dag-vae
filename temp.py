@@ -11,6 +11,7 @@ import seaborn as sns
 
 adata = load_h5ad('raw')
 
+
 def display (obj, adata):
 	[print (f"{item} has type:\t{type(obj[item])}") for item in obj]
 	print (f'adata: {adata}')				# could replace everything with this?
@@ -29,6 +30,7 @@ def display (obj, adata):
 	print (f'the total number of counts in each cell:\t{adata.obs["n_counts"][:10].tolist()}')
 	print (f'the total number genes expressed in each cell:\t{adata.obs["n_genes_expressed"][:10].tolist()}')
 	print (f'adata.layers:\t{adata.layers}')
+
     
 def examine_adata (adata):      # print out aggregates
 	print (f'the number of zero counts:\t{np.sum(adata.X == 0)}')
@@ -113,6 +115,7 @@ def plotViolin(adata, keysDict={}, height=8):
 	save_figure('violin_plot', f=fig)    
 	plt.close(fig)
 
+
 # this is basically what the violin plot does anyway??    
 def plotHistogram(adata, bins=50):
 
@@ -134,7 +137,8 @@ def plotHistogram(adata, bins=50):
 		     ax=ax[0] if cols > 1 else ax)
 
 	save_figure('histogram', f=fig)  
-  
+
+    
 def plotScatter(adata, pointSize=150, height=8, palette=sns.color_palette("deep")):
 
 	print ('PLOT: scatter')
@@ -156,19 +160,25 @@ def plotScatter(adata, pointSize=150, height=8, palette=sns.color_palette("deep"
 	save_figure ('scatter', f=fig)
 	plt.close(fig)
 
+
 def preprocessData(adata):
 	print (adata)
 
 	plotHighestExprGenes(adata)
 
 	'''
-	print (f'About to filter the cells: {adata.obs.keys()}')
+	print (f'About to filter the cells: {adata.obs.keys().tolist()}')
 	sc.pp.filter_cells(adata, min_genes=200)
-	print (f'After filtering the cells: {adata.obs.keys()}')
+	print (f'After filtering the cells: {adata.obs.keys().tolist()}')
 	'''
 	adata = adata[adata.obs.n_genes_expressed > 200, :]
 
+	'''
+    print (f'About to filter the genes: {adata.var.keys().tolist()}')
 	sc.pp.filter_genes(adata, min_cells=3)
+	print (f'After filtering the genes: {adata.var.keys().tolist()}')
+	'''
+	adata = adata[:, adata.var['n_cells'] > 2]
 
 	print (adata)
 
@@ -183,7 +193,8 @@ def preprocessData(adata):
 
 	# identify highly variable genes
 	sc.pp.highly_variable_genes(adata, min_mean=0.0125, max_mean=3, min_disp=0.5)
-	sc.pl.highly_variable_genes(adata)
+	sc.settings.figdir = './plots/'
+	sc.pl.highly_variable_genes(adata, save=True)
 
 	adata.raw = adata
 	adata = adata[:, adata.var.highly_variable]
@@ -271,10 +282,6 @@ def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, p
 	save_figure ('PCA', f=fig)
 	plt.close(fig)    
  
-
-
-
-
 
 preprocessData(adata)
 
