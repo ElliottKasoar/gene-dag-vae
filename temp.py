@@ -200,6 +200,20 @@ def preprocessData(adata):
 	adata = adata[:, adata.var.highly_variable]
 
 	save_h5ad(adata, 'preprocessed')
+
+# static calculation of size_factors using the 'median ration method': Eqn 5 in Anders and Huber (2010)
+def static_sf(adata):
+	print ('calculating static size factors')
+
+	products = np.prod(adata.X, axis=0)
+	print (f'products: {products[:10]}')
+	print (f'length of products: {len(products)}')
+
+	ratios = adata.X/products			# broadcasting	
+	print (f'ratios shape: {ratios.shape}')
+
+	size_factors = np.median(ratios, axis=1)	# cell-specific size factors
+	return size_factors
 	    
 	    
 def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, palette=sns.color_palette("deep"), plot_id = None):
@@ -284,6 +298,8 @@ def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, p
  
 
 preprocessData(adata)
+
+adata.obs['static_sf'] = static_sf(adata)		# check this works
 
 display ({'adata.X':adata.X,
 	'adata.var':adata.var,
