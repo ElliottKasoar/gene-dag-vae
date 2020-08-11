@@ -8,7 +8,9 @@ from keras import regularizers
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import QuantileTransformer
+from sklearn.preprocessing import QuantileTransformer, StandardScaler, MinMaxScaler
+from keras.layers.advanced_activations import LeakyReLU
+
 
 # =============================================================================
 # Model parameters
@@ -17,7 +19,12 @@ from sklearn.preprocessing import QuantileTransformer
 # Size of encoded representation
 encoding_dim = 256
 
+# Fraction of data used in training
 train_size = 0.7
+
+epochs = 250
+
+batch_size = 256
 
 # =============================================================================
 # Load data
@@ -31,10 +38,15 @@ x = adata.X
 input_dim = x.shape[1]
 input_shape = (input_dim,)
 
-qt = QuantileTransformer(n_quantiles=1000, output_distribution='normal')
-x = qt.fit_transform(x)
-scale = x.max(axis=0)
-x = np.divide(x, scale)
+# scaler = QuantileTransformer(n_quantiles=1000, output_distribution='normal')
+scaler = MinMaxScaler(feature_range=(0, 1))
+# scaler = StandardScaler()
+
+x = scaler.fit_transform(x)
+
+# scale = x.max(axis=0)
+# x = np.divide(x, scale)
+
 x_train, x_test = train_test_split(x, train_size=train_size)
 
 # =============================================================================
@@ -55,7 +67,7 @@ encoded = Dense(encoding_dim, activation='relu')(encoded)
 # Lossy reconstruction of the input
 decoded = Dense(512, activation='relu')(encoded)
 decoded = Dense(128, activation='relu')(decoded)
-decoded = Dense(input_dim, activation='tanh')(decoded)
+decoded = Dense(input_dim, activation='sigmoid')(decoded)
 
 # Model maps an input to its reconstruction
 autoencoder = Model(AE_input, decoded)
@@ -80,7 +92,7 @@ autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
 # Train model
 # =============================================================================
 
-autoencoder.fit(x_train, x_train, epochs=50, batch_size=256, shuffle=True)
+autoencoder.fit(x_train, x_train, epochs=epochs, batch_size=batch_size, shuffle=True)
 
 autoencoder.save('AE.h5')
 
