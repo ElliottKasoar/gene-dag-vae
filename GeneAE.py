@@ -80,7 +80,7 @@ autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
 # Train model
 # =============================================================================
 
-autoencoder.fit(x_train, x_train, epochs=100, batch_size=256, shuffle=True)
+autoencoder.fit(x_train, x_train, epochs=50, batch_size=256, shuffle=True)
 
 autoencoder.save('AE.h5')
 
