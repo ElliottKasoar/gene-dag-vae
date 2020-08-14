@@ -2,13 +2,17 @@
 # -*- coding: utf-8 -*-
 
 from load import save_h5ad, load_h5ad
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import QuantileTransformer, StandardScaler, MinMaxScaler
+
+from keras.utils import plot_model
 from keras.layers import Input, Dense
 from keras.models import Model
 from keras import regularizers
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import QuantileTransformer, StandardScaler, MinMaxScaler
 from keras.layers.advanced_activations import LeakyReLU
 
 
@@ -23,7 +27,6 @@ encoding_dim = 256
 train_size = 0.7
 
 epochs = 250
-
 batch_size = 256
 
 # =============================================================================
@@ -31,68 +34,66 @@ batch_size = 256
 # =============================================================================
 
 adata = load_h5ad('preprocessed')
-
-x = adata.X
+X = adata.X
 
 # Input shape
-input_dim = x.shape[1]
+input_dim = X.shape[1]
 input_shape = (input_dim,)
 
 # scaler = QuantileTransformer(n_quantiles=1000, output_distribution='normal')
-scaler = MinMaxScaler(feature_range=(0, 1))
 # scaler = StandardScaler()
+scaler = MinMaxScaler(feature_range=(0, 1))
 
-x = scaler.fit_transform(x)
+X = scaler.fit_transform(X)
 
-# scale = x.max(axis=0)
-# x = np.divide(x, scale)
+# scale = X.max(axis=0)
+# X = np.divide(X, scale)
 
-x_train, x_test = train_test_split(x, train_size=train_size)
+X_train, X_test = train_test_split(X, train_size=train_size)
 
 # =============================================================================
 # Build models
 # =============================================================================
 
-# Input placeholder
-AE_input = Input(shape=input_shape)
+# Encoder Model
+input	= Input(shape=input_shape)
+encoded	= Dense(1024, activation='relu')(input)
+encoded	= Dense(512, activation='relu')(encoded)
+latent	= Dense(encoding_dim, activation='relu')(encoded)
+
+encoder = Model(input, latent, name='encoder')
 
 # Encoded representation of the input (with sparsity contraint via regularizer)
 # encoded = Dense(encoding_dim, activation='relu', 
 #                 activity_regularizer=regularizers.l1(10e-5))(VAE_input)
 
-encoded = Dense(1024, activation='relu')(AE_input)
-encoded = Dense(512, activation='relu')(encoded)
-encoded = Dense(encoding_dim, activation='relu')(encoded)
-
+# Decoder Model 
 # Lossy reconstruction of the input
-decoded = Dense(512, activation='relu')(encoded)
-decoded = Dense(128, activation='relu')(decoded)
-decoded = Dense(input_dim, activation='sigmoid')(decoded)
+lat_input = Input(shape=(encoding_dim,))
+decoded = Dense(512, activation='relu')(lat_input)
+decoded	= Dense(128, activation='relu')(decoded)
+output	= Dense(input_dim, activation='sigmoid')(decoded)
 
-# Model maps an input to its reconstruction
-autoencoder = Model(AE_input, decoded)
+decoder = Model(lat_input, output, name='decoder')
 
-# Model maps an input to its encoded representation
-encoder_model = Model(AE_input, encoded)
+# Autoencoder Model
+output = decoder(encoder(input))
+autoencoder = Model(input, output, name='autoencoder')
 
-# Placeholder for an encoded input
-encoded_input = Input(shape=(encoding_dim,))
-
-# Retrieve the decoder layers from the autoencoder model
-decoder = autoencoder.layers[-3](encoded_input)
-decoder = autoencoder.layers[-2](decoder)
-decoder = autoencoder.layers[-1](decoder)
-
-# Create decoder model
-decoder_model = Model(encoded_input, decoder)
 
 autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
+
+print (autoencoder.summary())
+#plot_model(autoencoder, to_file='./autoencoder.png')
 
 # =============================================================================
 # Train model
 # =============================================================================
 
-autoencoder.fit(x_train, x_train, epochs=epochs, batch_size=batch_size, shuffle=True)
+autoencoder.fit(X_train, X_train,
+		epochs=epochs,
+		batch_size=batch_size,
+		shuffle=True)
 
 autoencoder.save('AE.h5')
 
@@ -100,7 +101,7 @@ autoencoder.save('AE.h5')
 # Test model
 # =============================================================================
 
-encoded_data = encoder_model.predict(x_test)
-decoded_data = decoder_model.predict(encoded_data)
+encoded_data = encoder.predict(X_test)
+decoded_data = decoder.predict(encoded_data)
 
 
