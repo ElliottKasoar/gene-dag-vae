@@ -56,10 +56,10 @@ X_train, X_test = train_test_split(X, train_size=train_size)
 # =============================================================================
 
 # Encoder Model
-input	= Input(shape=input_shape)
-encoded	= Dense(1024, activation='relu')(input)
-encoded	= Dense(512, activation='relu')(encoded)
-latent	= Dense(encoding_dim, activation='relu')(encoded)
+input    = Input(shape=input_shape)
+encoded    = Dense(1024, activation='relu')(input)
+encoded    = Dense(512, activation='relu')(encoded)
+latent    = Dense(encoding_dim, activation='relu')(encoded)
 
 encoder = Model(input, latent, name='encoder')
 
@@ -71,8 +71,8 @@ encoder = Model(input, latent, name='encoder')
 # Lossy reconstruction of the input
 lat_input = Input(shape=(encoding_dim,))
 decoded = Dense(512, activation='relu')(lat_input)
-decoded	= Dense(128, activation='relu')(decoded)
-output	= Dense(input_dim, activation='sigmoid')(decoded)
+decoded    = Dense(128, activation='relu')(decoded)
+output    = Dense(input_dim, activation='sigmoid')(decoded)
 
 decoder = Model(lat_input, output, name='decoder')
 
@@ -84,16 +84,16 @@ autoencoder = Model(input, output, name='autoencoder')
 autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
 
 print (autoencoder.summary())
-#plot_model(autoencoder, to_file='./autoencoder.png')
+plot_model(autoencoder)         
 
 # =============================================================================
 # Train model
 # =============================================================================
 
 autoencoder.fit(X_train, X_train,
-		epochs=epochs,
-		batch_size=batch_size,
-		shuffle=True)
+        epochs=epochs,
+        batch_size=batch_size,
+        shuffle=True)
 
 autoencoder.save('AE.h5')
 
