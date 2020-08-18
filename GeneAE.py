@@ -2,12 +2,16 @@
 # -*- coding: utf-8 -*-
 
 from load import save_h5ad, load_h5ad
+#from loss import NB_loglikelihood
 
 import numpy as np
 import matplotlib.pyplot as plt
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import QuantileTransformer, StandardScaler, MinMaxScaler
+
+import tensorflow as tf
+import keras.backend as K
 
 from keras.utils import plot_model
 from keras.layers import Input, Dense
@@ -35,6 +39,7 @@ batch_size = 256
 
 adata = load_h5ad('preprocessed')
 X = adata.X
+print (X.shape)
 
 # Input shape
 input_dim = X.shape[1]
@@ -54,14 +59,19 @@ X_train, X_test = train_test_split(X, train_size=train_size)
 # =============================================================================
 # Build models
 # =============================================================================
+model = 'nb'
+#model = 'gaussian'
 
 # Encoder Model
-input    = Input(shape=input_shape)
-encoded    = Dense(1024, activation='relu')(input)
-encoded    = Dense(512, activation='relu')(encoded)
-latent    = Dense(encoding_dim, activation='relu')(encoded)
+input   = Input(shape=input_shape)
+encoded = Dense(1024, activation='relu')(input)
+encoded = Dense(512, activation='relu')(encoded)
+latent  = Dense(encoding_dim, activation='relu')(encoded)
 
 encoder = Model(input, latent, name='encoder')
+
+plot_model(encoder, to_file='./plots/models/' + model + '_encoder.png',
+            show_shapes=True, show_layer_names=True)         
 
 # Encoded representation of the input (with sparsity contraint via regularizer)
 # encoded = Dense(encoding_dim, activation='relu', 
@@ -70,30 +80,84 @@ encoder = Model(input, latent, name='encoder')
 # Decoder Model 
 # Lossy reconstruction of the input
 lat_input = Input(shape=(encoding_dim,))
-decoded = Dense(512, activation='relu')(lat_input)
-decoded    = Dense(128, activation='relu')(decoded)
-output    = Dense(input_dim, activation='sigmoid')(decoded)
+decoded   = Dense(512, activation='relu')(lat_input)
+decoded   = Dense(128, activation='relu')(decoded)
 
-decoder = Model(lat_input, output, name='decoder')
+if model == 'gaussian': 
+    outputs = Dense(input_dim, activation='sigmoid')(decoded)
+
+elif model == 'nb':
+    MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
+    DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
+
+    mu = Dense(input_dim, activation = MeanAct, name='mu')(decoded)
+    disp = Dense(input_dim, activation = DispAct, name='disp')(decoded)
+    # pi = Dense(input_dim, activation = 'sigmoid', name='pi')(decoded)
+
+    outputs = [mu, disp]
+
+decoder = Model(lat_input, outputs, name='decoder')
+
+plot_model(decoder, to_file='./plots/models/' + model + '_decoder.png',
+            show_shapes=True, show_layer_names=True)         
 
 # Autoencoder Model
-output = decoder(encoder(input))
-autoencoder = Model(input, output, name='autoencoder')
-
-
-autoencoder.compile(optimizer='adam', loss='binary_crossentropy')
+outputs = decoder(encoder(input))
+autoencoder = Model(input, outputs, name='autoencoder')
 
 print (autoencoder.summary())
-plot_model(autoencoder)         
+plot_model(autoencoder, to_file='./plots/models/' + model + '_autoencoder.png',
+            show_shapes=True, show_layer_names=True)         
+
+# =============================================================================
+# Define custom loss
+# =============================================================================
+
+def NB_loglikelihood(r):
+
+    def loss (y_true, y_pred):
+        y = y_true[0]
+        mu = y_pred[0]
+
+        l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
+        l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
+        log_likelihood = l1 + l2
+
+        return  -K.sum(log_likelihood, axis=-1)
+
+    return loss
+
+if model == 'nb':
+    autoencoder.compile(optimizer='adam', loss=NB_loglikelihood(outputs[1]))
+
+'''
+# alternative method: add_loss does not require you to restrict the parameters of the loss to y_pred and y_actual 
+# may change to this
+if model == 'nb':
+    # outputs[0] = mu, outputs[1] = disp
+    reconstruction_loss = - K.sum(NB_loglikelihood(input, outputs[0], outputs[1]), axis=-1)
+
+    print (K.print_tensor(NB_loglikelihood(input, outputs[0], outputs[1])))
+    print (K.print_tensor(reconstruction_loss))
+
+#   autoencoder.add_loss(K.mean(reconstruction_loss))
+    autoencoder.add_loss(reconstruction_loss)
+'''
+
+if model == 'gaussian':
+    autoencoder.compile(optimizer='adam', loss='mse')
 
 # =============================================================================
 # Train model
 # =============================================================================
 
-autoencoder.fit(X_train, X_train,
-        epochs=epochs,
-        batch_size=batch_size,
-        shuffle=True)
+print (outputs[1].shape)
+
+loss = autoencoder.fit(X_train,
+       [X_train,X_train],           # ??
+       epochs=epochs,
+       batch_size=batch_size,
+       shuffle=True)
 
 autoencoder.save('AE.h5')
 
