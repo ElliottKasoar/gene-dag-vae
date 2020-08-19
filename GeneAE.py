@@ -19,6 +19,15 @@ from keras.models import Model
 from keras import regularizers
 from keras.layers.advanced_activations import LeakyReLU
 
+# NEED TO PUT THIS IN DIFFERENT FILE with code from temp.py
+# create directory 'models' if it doesn't exist
+base_dir = '.'
+plots_dir = base_dir + '/plots'
+models_dir = plots_dir + '/models'
+
+from pathlib import Path
+for i in [data_dir, processed_dir, plots_dir]:
+    Path(i).mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
 # Model parameters
@@ -70,7 +79,7 @@ latent  = Dense(encoding_dim, activation='relu')(encoded)
 
 encoder = Model(input, latent, name='encoder')
 
-plot_model(encoder, to_file='./plots/models/' + model + '_encoder.png',
+plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
             show_shapes=True, show_layer_names=True)         
 
 # Encoded representation of the input (with sparsity contraint via regularizer)
@@ -98,7 +107,7 @@ elif model == 'nb':
 
 decoder = Model(lat_input, outputs, name='decoder')
 
-plot_model(decoder, to_file='./plots/models/' + model + '_decoder.png',
+plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
             show_shapes=True, show_layer_names=True)         
 
 # Autoencoder Model
@@ -106,7 +115,7 @@ outputs = decoder(encoder(input))
 autoencoder = Model(input, outputs, name='autoencoder')
 
 print (autoencoder.summary())
-plot_model(autoencoder, to_file='./plots/models/' + model + '_autoencoder.png',
+plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
             show_shapes=True, show_layer_names=True)         
 
 # =============================================================================
