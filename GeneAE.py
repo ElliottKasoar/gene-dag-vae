@@ -26,7 +26,7 @@ plots_dir = base_dir + '/plots'
 models_dir = plots_dir + '/models'
 
 from pathlib import Path
-for i in [data_dir, processed_dir, plots_dir]:
+for i in [plots_dir, models_dir]:
     Path(i).mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
