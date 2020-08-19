@@ -24,10 +24,11 @@ from keras.layers.advanced_activations import LeakyReLU
 # sess = tf_debug.LocalCLIDebugWrapperSession(sess)
 # K.set_session(sess)
 
-tf.config.experimental_run_functions_eagerly(True)
+# tf.config.experimental_run_functions_eagerly(True)
 
 from time import time
-from tensorflow.python.keras.callbacks import Tensorboard
+# from tensorflow.keras.callbacks import TensorBoard
+from keras.callbacks import TensorBoard
 
 if int(tf.__version__[0]) < 2:
     tf2_flag = False
@@ -54,31 +55,30 @@ encoding_dim = 256
 # Fraction of data used in training
 train_size = 0.7
 
-epochs = 250
-batch_size = 256
+epochs = 100
+batch_size = 16
 
 # =============================================================================
 # Load data
 # =============================================================================
 
 adata = load_h5ad('preprocessed')
-X = adata.X
-print (X.shape)
+print (adata.X.shape)
 
 # Input shape
-input_dim = X.shape[1]
+input_dim = adata.X.shape[1]
 input_shape = (input_dim,)
 
 # scaler = QuantileTransformer(n_quantiles=1000, output_distribution='normal')
 # scaler = StandardScaler()
 scaler = MinMaxScaler(feature_range=(0, 1))
 
-X = scaler.fit_transform(X)
+adata.X = scaler.fit_transform(adata.X)
 
 # scale = X.max(axis=0)
 # X = np.divide(X, scale)
 
-X_train, X_test = train_test_split(X, train_size=train_size)
+X_train, X_test = train_test_split(adata.X, train_size=train_size)
 
 # =============================================================================
 # Build models
@@ -138,29 +138,18 @@ print (autoencoder.summary())
 # Define custom loss
 # =============================================================================
 
-test = []
-
-@tf.function
 def NB_loglikelihood(outputs):
     
-    @tf.function
     def loss (y_true, y_pred):
         print("Running!")
         print ("y_pred is: ", K.print_tensor(y_pred))	# check the shape!
-        print ("y_pred is: ", tf.print(y_pred))	# check the shape!
         print ("y_true is: ", K.print_tensor(y_true))	# check the shape!
-        print ("y_true is: ", tf.print(y_true))	# check the shape!
         print ("outputs is: ", K.print_tensor(outputs))	# check the shape!
-        print ("outputs is: ", tf.print(outputs))	# check the shape!
-        
-        test.append(y_pred.shape)
-        test.append(y_true.shape)
-        
+                
         y = y_true
-        # mu = y_pred
+        
         mu = outputs[0]
         r = outputs[1]
-        # r = y_pred[1]
         
         if tf2_flag:
             l1 = tf.math.lgamma(y+r) - tf.math.lgamma(r) - tf.math.lgamma(y+1.0)
@@ -175,8 +164,10 @@ def NB_loglikelihood(outputs):
 
     return loss
 
+
+# Loss function used twice (one for each output) but only used once
 if model == 'nb':
-    autoencoder.compile(optimizer='adam', loss=NB_loglikelihood(outputs))
+    autoencoder.compile(optimizer='adam', loss=NB_loglikelihood(outputs), loss_weights=[1., 0.0])
 
 
 # alternative method: add_loss does not require you to restrict the parameters
@@ -214,7 +205,8 @@ if model == 'nb':
 if model == 'gaussian':
     autoencoder.compile(optimizer='adam', loss='mse')
 
-tensorboard = Tensorboard(log_dir='logs/{}'.format(time()))
+# from tb_callback import MyTensorBoard
+tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
 
 # =============================================================================
 # Train model
@@ -227,7 +219,7 @@ loss = autoencoder.fit(X_train,
                        epochs=epochs,
                        batch_size=batch_size,
                        shuffle=True,
-                       calbacks=[tensorboard])
+                       callbacks=[tensorboard])
 
 autoencoder.save('AE.h5')
 
@@ -238,4 +230,4 @@ autoencoder.save('AE.h5')
 encoded_data = encoder.predict(X_test)
 decoded_data = decoder.predict(encoded_data)
 
-
+adata.X = scaler.inverse_transform(decoded_data)
