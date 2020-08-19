@@ -19,15 +19,20 @@ from keras.models import Model
 from keras import regularizers
 from keras.layers.advanced_activations import LeakyReLU
 
+if int(tf.__version__[0]) < 2:
+    tf2_flag = False
+else:
+    tf2_flag = True
+
 # NEED TO PUT THIS IN DIFFERENT FILE with code from temp.py
 # create directory 'models' if it doesn't exist
-base_dir = '.'
-plots_dir = base_dir + '/plots'
-models_dir = plots_dir + '/models'
+# base_dir = '.'
+# plots_dir = base_dir + '/plots'
+# models_dir = plots_dir + '/models'
 
-from pathlib import Path
-for i in [plots_dir, models_dir]:
-    Path(i).mkdir(parents=True, exist_ok=True)
+# from pathlib import Path
+# for i in [plots_dir, models_dir]:
+#     Path(i).mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
 # Model parameters
@@ -68,6 +73,7 @@ X_train, X_test = train_test_split(X, train_size=train_size)
 # =============================================================================
 # Build models
 # =============================================================================
+
 model = 'nb'
 #model = 'gaussian'
 
@@ -79,8 +85,8 @@ latent  = Dense(encoding_dim, activation='relu')(encoded)
 
 encoder = Model(input, latent, name='encoder')
 
-plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
-            show_shapes=True, show_layer_names=True)         
+# plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
+#            show_shapes=True, show_layer_names=True)
 
 # Encoded representation of the input (with sparsity contraint via regularizer)
 # encoded = Dense(encoding_dim, activation='relu', 
@@ -107,29 +113,34 @@ elif model == 'nb':
 
 decoder = Model(lat_input, outputs, name='decoder')
 
-plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
-            show_shapes=True, show_layer_names=True)         
+# plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
+#            show_shapes=True, show_layer_names=True)         
 
 # Autoencoder Model
 outputs = decoder(encoder(input))
 autoencoder = Model(input, outputs, name='autoencoder')
 
 print (autoencoder.summary())
-plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
-            show_shapes=True, show_layer_names=True)         
+# plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
+#            show_shapes=True, show_layer_names=True)         
 
 # =============================================================================
 # Define custom loss
 # =============================================================================
-'''
+
 def NB_loglikelihood(r):
 
     def loss (y_true, y_pred):
         y = y_true[0]
         mu = y_pred[0]
-
-        l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
-        l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
+        
+        if tf2_flag:
+            l1 = tf.math.lgamma(y+r) - tf.math.lgamma(r) - tf.math.lgamma(y+1.0)
+            l2 = y * tf.math.log(mu/(r+mu)) + r * tf.math.log(r/(r+mu))
+        else:
+            l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
+            l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
+            
         log_likelihood = l1 + l2
 
         return  -K.sum(log_likelihood, axis=-1)
@@ -138,29 +149,39 @@ def NB_loglikelihood(r):
 
 if model == 'nb':
     autoencoder.compile(optimizer='adam', loss=NB_loglikelihood(outputs[1]))
-'''
 
-# alternative method: add_loss does not require you to restrict the parameters of the loss to y_pred and y_actual 
+
+# alternative method: add_loss does not require you to restrict the parameters
+# of the loss to y_pred and y_actual 
 # may change to this
+
+'''
 def NB_loglikelihood(y, mu, r):
 
-    l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
-    l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
+    if tf2_flag:
+        l1 = tf.math.lgamma(y+r) - tf.math.lgamma(r) - tf.math.lgamma(y+1.0)
+        l2 = y * tf.math.log(mu/(r+mu)) + r * tf.math.log(r/(r+mu))
+    else:
+        l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
+        l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
+    
     log_likelihood = l1 + l2
-
+    
     return log_likelihood
 
+
 if model == 'nb':
-    reconstruction_loss = - K.sum(NB_loglikelihood(input, outputs[0], outputs[1]), axis=-1)
+    reconstruction_loss = - K.sum(NB_loglikelihood(input, outputs[0],
+                                                    outputs[1]), axis=-1)
 
     print (K.print_tensor(NB_loglikelihood(input, outputs[0], outputs[1])))
     print (K.print_tensor(reconstruction_loss))
 
-#   autoencoder.add_loss(K.mean(reconstruction_loss))
+  autoencoder.add_loss(K.mean(reconstruction_loss))
     autoencoder.add_loss(reconstruction_loss)
 
     autoencoder.compile(optimizer='adam', loss=None)
-
+'''
 
 if model == 'gaussian':
     autoencoder.compile(optimizer='adam', loss='mse')
@@ -172,10 +193,10 @@ if model == 'gaussian':
 print (outputs[1].shape)
 
 loss = autoencoder.fit(X_train,
-       [X_train,X_train],           # ??
-       epochs=epochs,
-       batch_size=batch_size,
-       shuffle=True)
+                       [X_train, X_train],
+                       epochs=epochs,
+                       batch_size=batch_size,
+                       shuffle=True)
 
 autoencoder.save('AE.h5')
 
