@@ -112,7 +112,7 @@ plot_model(autoencoder, to_file='./plots/models/' + model + '_autoencoder.png',
 # =============================================================================
 # Define custom loss
 # =============================================================================
-
+'''
 def NB_loglikelihood(r):
 
     def loss (y_true, y_pred):
@@ -129,12 +129,19 @@ def NB_loglikelihood(r):
 
 if model == 'nb':
     autoencoder.compile(optimizer='adam', loss=NB_loglikelihood(outputs[1]))
-
 '''
+
 # alternative method: add_loss does not require you to restrict the parameters of the loss to y_pred and y_actual 
 # may change to this
+def NB_loglikelihood(y, mu, r):
+
+    l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
+    l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
+    log_likelihood = l1 + l2
+
+    return log_likelihood
+
 if model == 'nb':
-    # outputs[0] = mu, outputs[1] = disp
     reconstruction_loss = - K.sum(NB_loglikelihood(input, outputs[0], outputs[1]), axis=-1)
 
     print (K.print_tensor(NB_loglikelihood(input, outputs[0], outputs[1])))
@@ -142,7 +149,9 @@ if model == 'nb':
 
 #   autoencoder.add_loss(K.mean(reconstruction_loss))
     autoencoder.add_loss(reconstruction_loss)
-'''
+
+    autoencoder.compile(optimizer='adam', loss=None)
+
 
 if model == 'gaussian':
     autoencoder.compile(optimizer='adam', loss='mse')
