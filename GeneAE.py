@@ -19,6 +19,17 @@ from keras.models import Model
 from keras import regularizers
 from keras.layers.advanced_activations import LeakyReLU
 
+# from tensorflow.python import debug as tf_debug
+# sess = K.get_session()
+# sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+# K.set_session(sess)
+
+# tf.config.experimental_run_functions_eagerly(True)
+
+from time import time
+# from tensorflow.keras.callbacks import TensorBoard
+from keras.callbacks import TensorBoard
+
 if int(tf.__version__[0]) < 2:
     tf2_flag = False
 else:
@@ -44,31 +55,30 @@ encoding_dim = 256
 # Fraction of data used in training
 train_size = 0.7
 
-epochs = 250
-batch_size = 256
+epochs = 100
+batch_size = 16
 
 # =============================================================================
 # Load data
 # =============================================================================
 
 adata = load_h5ad('preprocessed')
-X = adata.X
-print (X.shape)
+print (adata.X.shape)
 
 # Input shape
-input_dim = X.shape[1]
+input_dim = adata.X.shape[1]
 input_shape = (input_dim,)
 
 # scaler = QuantileTransformer(n_quantiles=1000, output_distribution='normal')
 # scaler = StandardScaler()
 scaler = MinMaxScaler(feature_range=(0, 1))
 
-X = scaler.fit_transform(X)
+adata.X = scaler.fit_transform(adata.X)
 
 # scale = X.max(axis=0)
 # X = np.divide(X, scale)
 
-X_train, X_test = train_test_split(X, train_size=train_size)
+X_train, X_test = train_test_split(adata.X, train_size=train_size)
 
 # =============================================================================
 # Build models
@@ -96,7 +106,7 @@ encoder = Model(input, latent, name='encoder')
 # Lossy reconstruction of the input
 lat_input = Input(shape=(encoding_dim,))
 decoded   = Dense(512, activation='relu')(lat_input)
-decoded   = Dense(128, activation='relu')(decoded)
+decoded   = Dense(1024, activation='relu')(decoded)
 
 if model == 'gaussian': 
     outputs = Dense(input_dim, activation='sigmoid')(decoded)
@@ -128,14 +138,18 @@ print (autoencoder.summary())
 # Define custom loss
 # =============================================================================
 
-def NB_loglikelihood(r):
-
+def NB_loglikelihood(outputs):
+    
     def loss (y_true, y_pred):
+        print("Running!")
         print ("y_pred is: ", K.print_tensor(y_pred))	# check the shape!
         print ("y_true is: ", K.print_tensor(y_true))	# check the shape!
-
-        y = y_true[0]
-        mu = y_pred[0]
+        print ("outputs is: ", K.print_tensor(outputs))	# check the shape!
+                
+        y = y_true
+        
+        mu = outputs[0]
+        r = outputs[1]
         
         if tf2_flag:
             l1 = tf.math.lgamma(y+r) - tf.math.lgamma(r) - tf.math.lgamma(y+1.0)
@@ -150,8 +164,10 @@ def NB_loglikelihood(r):
 
     return loss
 
+
+# Loss function used twice (one for each output) but only used once
 if model == 'nb':
-    autoencoder.compile(optimizer='adam', loss=NB_loglikelihood(outputs[1]))
+    autoencoder.compile(optimizer='adam', loss=NB_loglikelihood(outputs), loss_weights=[1., 0.0])
 
 
 # alternative method: add_loss does not require you to restrict the parameters
@@ -189,6 +205,9 @@ if model == 'nb':
 if model == 'gaussian':
     autoencoder.compile(optimizer='adam', loss='mse')
 
+# from tb_callback import MyTensorBoard
+tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
+
 # =============================================================================
 # Train model
 # =============================================================================
@@ -196,10 +215,11 @@ if model == 'gaussian':
 print (outputs[1].shape)
 
 loss = autoencoder.fit(X_train,
-                       [X_train, X_train],    # second element is a placeholder
+                       [X_train, X_train],
                        epochs=epochs,
                        batch_size=batch_size,
-                       shuffle=True)
+                       shuffle=True,
+                       callbacks=[tensorboard])
 
 autoencoder.save('AE.h5')
 
@@ -210,4 +230,4 @@ autoencoder.save('AE.h5')
 encoded_data = encoder.predict(X_test)
 decoded_data = decoder.predict(encoded_data)
 
-
+adata.X = scaler.inverse_transform(decoded_data)
