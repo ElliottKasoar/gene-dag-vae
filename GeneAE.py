@@ -131,6 +131,9 @@ print (autoencoder.summary())
 def NB_loglikelihood(r):
 
     def loss (y_true, y_pred):
+        print ("y_pred is: ", K.print_tensor(y_pred))	# check the shape!
+        print ("y_true is: ", K.print_tensor(y_true))	# check the shape!
+
         y = y_true[0]
         mu = y_pred[0]
         
@@ -193,7 +196,7 @@ if model == 'gaussian':
 print (outputs[1].shape)
 
 loss = autoencoder.fit(X_train,
-                       [X_train, X_train],
+                       [X_train, X_train],    # second element is a placeholder
                        epochs=epochs,
                        batch_size=batch_size,
                        shuffle=True)
