@@ -19,6 +19,13 @@ from keras.models import Model
 from keras import regularizers
 from keras.layers.advanced_activations import LeakyReLU
 
+# from tensorflow.python import debug as tf_debug
+# sess = K.get_session()
+# sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+# K.set_session(sess)
+
+tf.config.experimental_run_functions_eagerly(True)
+
 if int(tf.__version__[0]) < 2:
     tf2_flag = False
 else:
@@ -96,7 +103,7 @@ encoder = Model(input, latent, name='encoder')
 # Lossy reconstruction of the input
 lat_input = Input(shape=(encoding_dim,))
 decoded   = Dense(512, activation='relu')(lat_input)
-decoded   = Dense(128, activation='relu')(decoded)
+decoded   = Dense(1024, activation='relu')(decoded)
 
 if model == 'gaussian': 
     outputs = Dense(input_dim, activation='sigmoid')(decoded)
@@ -128,14 +135,29 @@ print (autoencoder.summary())
 # Define custom loss
 # =============================================================================
 
-def NB_loglikelihood(r):
+test = []
 
+@tf.function
+def NB_loglikelihood(outputs):
+    
+    @tf.function
     def loss (y_true, y_pred):
+        print("Running!")
         print ("y_pred is: ", K.print_tensor(y_pred))	# check the shape!
+        print ("y_pred is: ", tf.print(y_pred))	# check the shape!
         print ("y_true is: ", K.print_tensor(y_true))	# check the shape!
-
-        y = y_true[0]
-        mu = y_pred[0]
+        print ("y_true is: ", tf.print(y_true))	# check the shape!
+        print ("outputs is: ", K.print_tensor(outputs))	# check the shape!
+        print ("outputs is: ", tf.print(outputs))	# check the shape!
+        
+        test.append(y_pred.shape)
+        test.append(y_true.shape)
+        
+        y = y_true
+        # mu = y_pred
+        mu = outputs[0]
+        r = outputs[1]
+        # r = y_pred[1]
         
         if tf2_flag:
             l1 = tf.math.lgamma(y+r) - tf.math.lgamma(r) - tf.math.lgamma(y+1.0)
@@ -151,7 +173,7 @@ def NB_loglikelihood(r):
     return loss
 
 if model == 'nb':
-    autoencoder.compile(optimizer='adam', loss=NB_loglikelihood(outputs[1]))
+    autoencoder.compile(optimizer='adam', loss=NB_loglikelihood(outputs))
 
 
 # alternative method: add_loss does not require you to restrict the parameters
@@ -196,7 +218,7 @@ if model == 'gaussian':
 print (outputs[1].shape)
 
 loss = autoencoder.fit(X_train,
-                       [X_train, X_train],    # second element is a placeholder
+                       [X_train, X_train],
                        epochs=epochs,
                        batch_size=batch_size,
                        shuffle=True)
