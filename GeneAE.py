@@ -26,6 +26,9 @@ from keras.layers.advanced_activations import LeakyReLU
 
 tf.config.experimental_run_functions_eagerly(True)
 
+from time import time
+from tensorflow.python.keras.callbacks import Tensorboard
+
 if int(tf.__version__[0]) < 2:
     tf2_flag = False
 else:
@@ -211,6 +214,8 @@ if model == 'nb':
 if model == 'gaussian':
     autoencoder.compile(optimizer='adam', loss='mse')
 
+tensorboard = Tensorboard(log_dir='logs/{}'.format(time()))
+
 # =============================================================================
 # Train model
 # =============================================================================
@@ -221,7 +226,8 @@ loss = autoencoder.fit(X_train,
                        [X_train, X_train],
                        epochs=epochs,
                        batch_size=batch_size,
-                       shuffle=True)
+                       shuffle=True,
+                       calbacks=[tensorboard])
 
 autoencoder.save('AE.h5')
 
