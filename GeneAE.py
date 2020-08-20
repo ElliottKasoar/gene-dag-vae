@@ -37,13 +37,13 @@ else:
 
 # NEED TO PUT THIS IN DIFFERENT FILE with code from temp.py
 # create directory 'models' if it doesn't exist
-# base_dir = '.'
-# plots_dir = base_dir + '/plots'
-# models_dir = plots_dir + '/models'
+base_dir = '.'
+plots_dir = base_dir + '/plots'
+models_dir = plots_dir + '/models'
 
-# from pathlib import Path
-# for i in [plots_dir, models_dir]:
-#     Path(i).mkdir(parents=True, exist_ok=True)
+from pathlib import Path
+for i in [plots_dir, models_dir]:
+    Path(i).mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
 # Model parameters
@@ -56,14 +56,15 @@ encoding_dim = 256
 train_size = 0.7
 
 epochs = 100
-batch_size = 16
+batch_size = 256
 
 # =============================================================================
 # Load data
 # =============================================================================
 
-adata = load_h5ad('preprocessed')
+adata = load_h5ad('preprocessed')    # need to add code to ensure this exists	
 print (adata.X.shape)
+print ("I'm here")
 
 # Input shape
 input_dim = adata.X.shape[1]
@@ -84,7 +85,7 @@ X_train, X_test = train_test_split(adata.X, train_size=train_size)
 # Build models
 # =============================================================================
 
-model = 'nb'
+model = 'zinb'
 #model = 'gaussian'
 
 # Encoder Model
@@ -95,8 +96,8 @@ latent  = Dense(encoding_dim, activation='relu')(encoded)
 
 encoder = Model(input, latent, name='encoder')
 
-# plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
-#            show_shapes=True, show_layer_names=True)
+plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
+           show_shapes=True, show_layer_names=True)
 
 # Encoded representation of the input (with sparsity contraint via regularizer)
 # encoded = Dense(encoding_dim, activation='relu', 
@@ -111,45 +112,48 @@ decoded   = Dense(1024, activation='relu')(decoded)
 if model == 'gaussian': 
     outputs = Dense(input_dim, activation='sigmoid')(decoded)
 
-elif model == 'nb':
+elif model == 'zinb':
+    #pi activation is sigmoid because values restricted to [0,1]
+
     MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
     DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
 
     mu = Dense(input_dim, activation = MeanAct, name='mu')(decoded)
     disp = Dense(input_dim, activation = DispAct, name='disp')(decoded)
-    # pi = Dense(input_dim, activation = 'sigmoid', name='pi')(decoded)
+    pi = Dense(input_dim, activation = 'sigmoid', name='pi')(decoded)
 
-    outputs = [mu, disp]
+    outputs = [mu, disp, pi]
 
 decoder = Model(lat_input, outputs, name='decoder')
 
-# plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
-#            show_shapes=True, show_layer_names=True)         
+plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
+           show_shapes=True, show_layer_names=True)         
 
 # Autoencoder Model
 outputs = decoder(encoder(input))
 autoencoder = Model(input, outputs, name='autoencoder')
 
 print (autoencoder.summary())
-# plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
-#            show_shapes=True, show_layer_names=True)         
+plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
+           show_shapes=True, show_layer_names=True)         
 
 # =============================================================================
 # Define custom loss
 # =============================================================================
 
-def NB_loglikelihood(outputs):
-    
+def ZINB_loglikelihood(outputs):
+    # return scalar loss for each data point 
     def loss (y_true, y_pred):
         print("Running!")
-        print ("y_pred is: ", K.print_tensor(y_pred))	# check the shape!
-        print ("y_true is: ", K.print_tensor(y_true))	# check the shape!
-        print ("outputs is: ", K.print_tensor(outputs))	# check the shape!
+        print ("y_pred is: ", K.print_tensor(y_pred))    # check the shape!
+        print ("y_true is: ", K.print_tensor(y_true))    # check the shape!
+        print ("outputs is: ", K.print_tensor(outputs))    # check the shape!
                 
         y = y_true
         
         mu = outputs[0]
         r = outputs[1]
+        pi = outputs[2]
         
         if tf2_flag:
             l1 = tf.math.lgamma(y+r) - tf.math.lgamma(r) - tf.math.lgamma(y+1.0)
@@ -158,16 +162,26 @@ def NB_loglikelihood(outputs):
             l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
             l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
             
-        log_likelihood = l1 + l2
+        nb_log_likelihood = l1 + l2
 
-        return  -K.sum(log_likelihood, axis=-1)
+        if tf2_flag:
+            case_zero = tf.math.log(pi + (1.0-pi) * tf.math.pow((r/(r+mu)), r))
+            case_nonzero = tf.math.log(1.0-pi) + nb_log_likelihood
+        else:
+            case_zero = tf.log(pi + (1.0-pi) * tf.pow((r/(r+mu)), r))
+            case_nonzero = tf.log(1.0-pi) + nb_log_likelihood
+
+        # whenever a count value < 1e-8, use case_zero for the log-likelihood
+        zinb_log_likelihood = tf.where(tf.less(y, 1e-8), case_zero, case_nonzero)
+        # return scalar for each cell; cell likelihood = product of likelihoods over genes
+        return  -K.sum(zinb_log_likelihood, axis=-1)
 
     return loss
 
 
-# Loss function used twice (one for each output) but only used once
-if model == 'nb':
-    autoencoder.compile(optimizer='adam', loss=NB_loglikelihood(outputs), loss_weights=[1., 0.0])
+# Loss function run thrice (once for each output) but only one used
+if model == 'zinb':
+    autoencoder.compile(optimizer='adam', loss=ZINB_loglikelihood(outputs), loss_weights=[1., 0.0, 0.0])
 
 
 # alternative method: add_loss does not require you to restrict the parameters
@@ -215,7 +229,7 @@ tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
 print (outputs[1].shape)
 
 loss = autoencoder.fit(X_train,
-                       [X_train, X_train],
+                       [X_train,X_train,X_train],   # 2nd,3rd elements not used
                        epochs=epochs,
                        batch_size=batch_size,
                        shuffle=True,
@@ -230,4 +244,4 @@ autoencoder.save('AE.h5')
 encoded_data = encoder.predict(X_test)
 decoded_data = decoder.predict(encoded_data)
 
-adata.X = scaler.inverse_transform(decoded_data)
+adata.X = scaler.inverse_transform(decoded_data)    # check this
