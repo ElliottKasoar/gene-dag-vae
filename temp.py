@@ -162,46 +162,47 @@ def plotScatter(adata, pointSize=150, height=8, palette=sns.color_palette("deep"
 
 
 def preprocessData(adata):
-    print (adata)
 
-    plotHighestExprGenes(adata)
+#    plotHighestExprGenes(adata)
 
-    '''
-    print (f'About to filter the cells: {adata.obs.keys().tolist()}')
-    sc.pp.filter_cells(adata, min_genes=200)
-    print (f'After filtering the cells: {adata.obs.keys().tolist()}')
-    '''
+    
+#    print (f'About to filter the cells: {adata.obs.keys().tolist()}')
+#    sc.pp.filter_cells(adata, min_genes=200)
+#    print (f'After filtering the cells: {adata.obs.keys().tolist()}')
+   
     adata = adata[adata.obs.n_genes_expressed > 200, :]
 
-    '''
-    print (f'About to filter the genes: {adata.var.keys().tolist()}')
-    sc.pp.filter_genes(adata, min_cells=3)
-    print (f'After filtering the genes: {adata.var.keys().tolist()}')
-    '''
+#    print (f'About to filter the genes: {adata.var.keys().tolist()}')
+#    sc.pp.filter_genes(adata, min_cells=3)
+#    print (f'After filtering the genes: {adata.var.keys().tolist()}')
+
     adata = adata[:, adata.var['n_cells'] > 2]
 
-    print (adata)
-
-    plotViolin(adata, {'number of gene counts':'n_counts',
-               'number of genes expressed':'n_genes_expressed'})
-    plotHistogram(adata)
-    plotScatter(adata)
+#    plotViolin(adata, {'number of gene counts':'n_counts',
+#               'number of genes expressed':'n_genes_expressed'})
+#    plotHistogram(adata)
+#    plotScatter(adata)
 
     adata = adata[adata.obs.n_genes_expressed < 2500, :]
-    sc.pp.normalize_total(adata, target_sum=1e4)        # normalize to 1e4 counts per cell so cells are comparable
-    sc.pp.log1p(adata)
+    print ('after filtering, shape:', adata.X.shape)
 
+#    sc.pp.normalize_total(adata, target_sum=1e4)    # normalize to 1e4 counts per cell so cells are comparable
+#    sc.pp.log1p(adata)
+
+    
     # identify highly variable genes
-    sc.pp.highly_variable_genes(adata, min_mean=0.0125, max_mean=3, min_disp=0.5)
-    sc.settings.figdir = './plots/'
-    sc.pl.highly_variable_genes(adata, save=True)
+#    sc.pp.highly_variable_genes(adata, min_mean=0.0125, max_mean=3, min_disp=0.5)
+#    sc.settings.figdir = './plots/'
+#    sc.pl.highly_variable_genes(adata, save=True)
+#
+#    adata.raw = adata
+#    adata = adata[:, adata.var.highly_variable]
 
-    adata.raw = adata
-    adata = adata[:, adata.var.highly_variable]
+    return adata
 
-    save_h5ad(adata, 'preprocessed')
 
-# static calculation of size_factors using the 'median ration method': Eqn 5 in Anders and Huber (2010)
+# this gives nan values since every cell has at least one zero count
+# static calculation of size_factors using the 'median ratio method': Eqn 5 in Anders and Huber (2010)
 def static_sf(adata):
     print ('calculating static size factors')
 
@@ -215,6 +216,12 @@ def static_sf(adata):
     size_factors = np.median(ratios, axis=1)    # cell-specific size factors
     return size_factors
         
+# revised method for calculating size factors
+def calculate_sf(adata):
+    print ('calculating size factors')
+
+    size_factors = adata.obs['n_counts'] / np.median(adata.X, axis=1)
+    return size_factors
         
 def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, palette=sns.color_palette("deep"), plot_id = None):
 
@@ -297,9 +304,13 @@ def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, p
     plt.close(fig)    
  
 
-preprocessData(adata)
+adata = preprocessData(adata)
+print (adata.X.shape)
 
-adata.obs['static_sf'] = static_sf(adata)        # check this works
+#adata.obs['static_sf'] = static_sf(adata)        # check this works
+adata.obs['sf'] = calculate_sf(adata)             # check this works
+
+save_h5ad(adata, 'preprocessed')
 
 display ({'adata.X':adata.X,
     'adata.var':adata.var,
@@ -307,7 +318,7 @@ display ({'adata.X':adata.X,
     'adata.uns':adata.uns},
     adata)
 
-examine_adata (adata)
+#examine_adata (adata)
 
 #plotPCA(adata, listVariables=['n_counts'])        # need to revit this
 
