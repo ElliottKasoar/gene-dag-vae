@@ -63,8 +63,6 @@ batch_size = 256
 # =============================================================================
 
 adata = load_h5ad('preprocessed')    # need to add code to ensure this exists	
-print (adata.X.shape)
-print ("I'm here")
 
 # Input shape
 input_dim = adata.X.shape[1]
@@ -89,10 +87,10 @@ model = 'zinb'
 #model = 'gaussian'
 
 # Encoder Model
-input   = Input(shape=input_shape)
+input   = Input(shape=input_shape, name='count_input')
 encoded = Dense(1024, activation='relu')(input)
 encoded = Dense(512, activation='relu')(encoded)
-latent  = Dense(encoding_dim, activation='relu')(encoded)
+latent  = Dense(encoding_dim, activation='relu', name='latent')(encoded)
 
 encoder = Model(input, latent, name='encoder')
 
@@ -102,6 +100,12 @@ plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
 # Encoded representation of the input (with sparsity contraint via regularizer)
 # encoded = Dense(encoding_dim, activation='relu', 
 #                 activity_regularizer=regularizers.l1(10e-5))(VAE_input)
+
+# Size factors
+# when the model becomes vaiational, we will sample from sf_input
+# as it is this does nothing between the 2 layers
+sf_input = Input(shape=(1,), name='size_factor_input')
+sf = Dense(1)(sf_input)
 
 # Decoder Model 
 # Lossy reconstruction of the input
@@ -122,20 +126,27 @@ elif model == 'zinb':
     disp = Dense(input_dim, activation = DispAct, name='disp')(decoded)
     pi = Dense(input_dim, activation = 'sigmoid', name='pi')(decoded)
 
-    outputs = [mu, disp, pi]
+    # multiply mu by sf here, broadcasting not done >> need to use K.repeat_elements
+    tf.reshape(sf, [-1,1])    # column vector reshaped to row vector
+    mu_sf = mu                # multiply by sf here
+
+    outputs = [mu_sf, disp, pi]
 
 decoder = Model(lat_input, outputs, name='decoder')
 
 plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
            show_shapes=True, show_layer_names=True)         
 
+
 # Autoencoder Model
-outputs = decoder(encoder(input))
-autoencoder = Model(input, outputs, name='autoencoder')
+inputs = [input, sf_input]
+outputs = decoder(encoder(inputs[0]))
+autoencoder = Model(inputs[0], outputs, name='autoencoder')
 
 print (autoencoder.summary())
 plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
            show_shapes=True, show_layer_names=True)         
+
 
 # =============================================================================
 # Define custom loss
@@ -174,7 +185,7 @@ def ZINB_loglikelihood(outputs):
         # whenever a count value < 1e-8, use case_zero for the log-likelihood
         zinb_log_likelihood = tf.where(tf.less(y, 1e-8), case_zero, case_nonzero)
         # return scalar for each cell; cell likelihood = product of likelihoods over genes
-        return  -K.sum(zinb_log_likelihood, axis=-1)
+        return  -K.sum(zinb_log_likelihood, axis=1)
 
     return loss
 
@@ -228,7 +239,7 @@ tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
 
 print (outputs[1].shape)
 
-loss = autoencoder.fit(X_train,
+loss = autoencoder.fit(X_train,  # will need to pass adata.obs['sf'] as an input
                        [X_train,X_train,X_train],   # 2nd,3rd elements not used
                        epochs=epochs,
                        batch_size=batch_size,
@@ -245,3 +256,5 @@ encoded_data = encoder.predict(X_test)
 decoded_data = decoder.predict(encoded_data)
 
 adata.X = scaler.inverse_transform(decoded_data)    # check this
+save_h5ad('denoised')
+
