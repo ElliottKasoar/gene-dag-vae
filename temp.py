@@ -186,9 +186,8 @@ def preprocessData(adata):
     adata = adata[adata.obs.n_genes_expressed < 2500, :]
     print ('after filtering, shape:', adata.X.shape)
 
-#    sc.pp.normalize_total(adata, target_sum=1e4)    # normalize to 1e4 counts per cell so cells are comparable
-#    sc.pp.log1p(adata)
-
+    sc.pp.normalize_total(adata, target_sum=1e4)    # normalize to 1e4 counts per cell so cells are comparable
+    sc.pp.log1p(adata)
     
     # identify highly variable genes
 #    sc.pp.highly_variable_genes(adata, min_mean=0.0125, max_mean=3, min_disp=0.5)
@@ -215,14 +214,16 @@ def static_sf(adata):
 
     size_factors = np.median(ratios, axis=1)    # cell-specific size factors
     return size_factors
-        
+
+
 # revised method for calculating size factors
 def calculate_sf(adata):
     print ('calculating size factors')
 
-    size_factors = adata.obs['n_counts'] / np.median(adata.X, axis=1)
+    size_factors = adata.obs['n_counts'] / np.mean(adata.X, axis=1)
     return size_factors
-        
+
+
 def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, palette=sns.color_palette("deep"), plot_id = None):
 
     print ('PLOT: pca')
