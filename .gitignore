@@ -140,6 +140,8 @@ cython_debug/
 # Logs
 logs/
 
-# h5 files
+# Large files
 *.h5
 *.hdf5
+*.h5ad
+*.txt
