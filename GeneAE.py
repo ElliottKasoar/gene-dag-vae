@@ -115,10 +115,9 @@ plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
 #                 activity_regularizer=regularizers.l1(10e-5))(VAE_input)
 
 # Size factors
-# when the model becomes vaiational, we will sample from sf_input
-# as it is this does nothing between the 2 layers
-sf_input = Input(shape=(1,), name='size_factor_input')
-sf = Dense(1)(sf_input)
+# try learning sf from the input data, hopefully will prevent factors from being so large
+#sf_input = Input(shape-input_shape, name='size_factor_input')
+sf = Dense(1)(count_input)
 
 # Decoder Model 
 # Lossy reconstruction of the input
@@ -149,7 +148,7 @@ elif model == 'zinb':
 
     decoder_outputs = [mu_sf, disp, pi]
 
-decoder_inputs = [sf_input, lat_input]
+decoder_inputs = [lat_input, count_input]
 decoder = Model(decoder_inputs, decoder_outputs, name='decoder')
 
 plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
@@ -157,8 +156,8 @@ plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
 
 
 # Autoencoder Model
-AE_inputs = [count_input, sf_input]
-AE_outputs = decoder([sf_input, encoder(count_input)])
+AE_inputs = [count_input]
+AE_outputs = decoder([encoder(count_input), count_input])
 autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
 
 print (autoencoder.summary())
@@ -260,7 +259,7 @@ tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
 # =============================================================================
 
 # Pass adata.obs['sf'] as an input. 2nd, 3rd elements of y not used
-loss = autoencoder.fit([X_train, sf_train],
+loss = autoencoder.fit(X_train,
                        [X_train, X_train, X_train],
                        epochs=epochs,
                        batch_size=batch_size,
@@ -283,4 +282,5 @@ save_h5ad(adata, 'denoised')
 
 def test_model():
     encoded_data = encoder.predict(X_train[0:batch_size])
-    decoded_data = decoder.predict([adata.obs['sf'].values[0:batch_size], encoded_data])
+#    decoded_data = decoder.predict([adata.obs['sf'].values[0:batch_size], encoded_data])
+    decoded_data = decoder.predict([encoded_data, X_train[0:batch_size]])
