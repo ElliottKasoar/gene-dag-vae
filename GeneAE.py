@@ -372,3 +372,5 @@ def test_AE():
     else:
         encoded_data = encoder.predict(X_train[0:batch_size])
         decoded_data = decoder.predict(encoded_data)
+        
+    return decoded_data
