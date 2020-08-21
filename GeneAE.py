@@ -60,7 +60,7 @@ encoding_dim = 256
 # Fraction of data used in training
 train_size = 0.7
 
-epochs = 10
+epochs = 2
 batch_size = 256
 
 # =============================================================================
@@ -87,8 +87,8 @@ adata.obs['sf'].values[:] = sf_scaler.fit_transform(adata.obs['sf'].values.resha
 # scale = X.max(axis=0)
 # X = np.divide(X, scale)
 
-X_train, X_test = train_test_split(adata.X, train_size=train_size, 
-                                   shuffle=False)
+X_train, X_test = train_test_split(adata.X, 
+                                   train_size=train_size, shuffle=False)
 sf_train, sf_test = train_test_split(adata.obs['sf'].values, 
                                      train_size=train_size, shuffle=False)
 
@@ -96,7 +96,10 @@ sf_train, sf_test = train_test_split(adata.obs['sf'].values,
 # Build models
 # =============================================================================
 
-model = 'zinb'
+use_sf = True
+calc_sf = True
+# model = 'zinb'
+model = 'nb'
 #model = 'gaussian'
 
 # Encoder Model
@@ -117,7 +120,14 @@ plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
 # Size factors
 # try learning sf from the input data, hopefully will prevent factors from being so large
 #sf_input = Input(shape-input_shape, name='size_factor_input')
-sf = Dense(1)(count_input)
+if use_sf:
+    if calc_sf:
+        sf = Dense(1)(count_input)
+        sf_model = Model(count_input, sf, name='sf_model')
+    else:
+        sf_input = Input(shape=(1,), name='size_factor_input')
+        sf = Dense(1)(sf_input)
+        sf_model = Model(sf_input, sf, name='sf_model')
 
 # Decoder Model 
 # Lossy reconstruction of the input
@@ -128,36 +138,56 @@ x = Dense(1024, activation='relu')(x)
 if model == 'gaussian': 
     decoder_outputs = Dense(input_dim, activation='sigmoid')(x)
 
-elif model == 'zinb':
-    #pi activation is sigmoid because values restricted to [0,1]
+elif model == 'nb' or model == 'zinb':
 
     MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
     DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
 
     mu = Dense(input_dim, activation = MeanAct, name='mu')(x)
     disp = Dense(input_dim, activation = DispAct, name='disp')(x)
-    pi = Dense(input_dim, activation = 'sigmoid', name='pi')(x)
 
-    # multiply mu by sf here, broadcasting not done >> need to use K.repeat_elements
-    # sf_reshape = tf.reshape(sf, [-1,1])    # column vector reshaped to row vector
-    
+    # Multiply mu by sf here, broadcasting not done >> need to use K.repeat_elements
+    # sf_reshape = tf.reshape(sf, [-1,1]) # Column vector reshaped to row vector    
     # sf = K.repeat_elements(sf, input_dim, 1)
-    mu_sf = multiply([mu, sf])
+    # mu_sf = mu * sf_reshape # Multiply by sf here
     
-    # mu_sf = mu * sf_reshape                # multiply by sf here
+    if use_sf:
+        mu_sf = multiply([mu, sf])
+        decoder_outputs = [mu_sf, disp]
+        
+        if calc_sf:
+            decoder_inputs = [lat_input, count_input]
+        else:
+            decoder_inputs = [lat_input, sf_input]
+            
+    else:
+        decoder_inputs = lat_input
+        decoder_outputs = [mu, disp]
+    
+    if model == 'zinb':
+        # Activation is sigmoid because values restricted to [0,1]
+        pi = Dense(input_dim, activation = 'sigmoid', name='pi')(x)
+        decoder_outputs.append(pi)    
 
-    decoder_outputs = [mu_sf, disp, pi]
 
-decoder_inputs = [lat_input, count_input]
 decoder = Model(decoder_inputs, decoder_outputs, name='decoder')
 
 plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
            show_shapes=True, show_layer_names=True)         
 
-
 # Autoencoder Model
-AE_inputs = [count_input]
-AE_outputs = decoder([encoder(count_input), count_input])
+
+if use_sf:
+    if calc_sf:    
+        AE_inputs = count_input
+        AE_outputs = decoder([encoder(count_input), count_input])
+    else:
+        AE_inputs = [count_input, sf_input]
+        AE_outputs = decoder([encoder(count_input), sf_input])
+else:
+    AE_inputs = count_input
+    AE_outputs = decoder(encoder(count_input))
+
 autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
 
 print (autoencoder.summary())
@@ -168,15 +198,36 @@ plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
 # Define custom loss
 # =============================================================================
 
+def NB_loglikelihood(outputs):
+    
+    def loss (y_true, y_pred):
+
+        eps = 1e-10 # Prevent NaN loss value?        
+
+        y = y_true
+        
+        mu = outputs[0]
+        r = outputs[1]
+        
+        if tf2_flag:
+            l1 = tf.math.lgamma(y+r+eps) - tf.math.lgamma(r+eps) - tf.math.lgamma(y+1.0)
+            l2 = y * tf.math.log((mu+eps)/(r+mu+eps)) + r * tf.math.log((r+eps)/(r+mu+eps))
+        else:
+            l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
+            l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
+            
+        log_likelihood = l1 + l2
+
+        return  -K.sum(log_likelihood, axis=-1)
+
+    return loss
+
+
 def ZINB_loglikelihood(outputs):
     # return scalar loss for each data point 
     def loss (y_true, y_pred):
-        # print("Running!")
-        # print ("y_pred is: ", K.print_tensor(y_pred))    # check the shape!
-        # print ("y_true is: ", K.print_tensor(y_true))    # check the shape!
-        # print ("outputs is: ", K.print_tensor(outputs))    # check the shape!
         
-        eps = 1e-10 # Prevent NaN loss value
+        eps = 1e-10 # Prevent NaN loss value?
         
         y = y_true
         
@@ -186,7 +237,7 @@ def ZINB_loglikelihood(outputs):
         
         if tf2_flag:
             l1 = tf.math.lgamma(y+r+eps) - tf.math.lgamma(r+eps) - tf.math.lgamma(y+1.0)
-            l2 = y * tf.math.log(eps+mu/(r+mu+eps)) + r * tf.math.log(eps+r/(r+mu+eps))
+            l2 = y * tf.math.log((mu+eps)/(r+mu+eps)) + r * tf.math.log((r+eps)/(r+mu+eps))
         else:
             l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
             l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
@@ -215,6 +266,10 @@ if model == 'zinb':
                         loss=ZINB_loglikelihood(AE_outputs),
                         loss_weights=[1., 0.0, 0.0])
 
+if model == 'nb':
+    autoencoder.compile(optimizer='adam',
+                        loss=NB_loglikelihood(AE_outputs),
+                        loss_weights=[1., 0.0])
 
 # alternative method: add_loss does not require you to restrict the parameters
 # of the loss to y_pred and y_actual 
@@ -258,13 +313,21 @@ tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
 # Train model
 # =============================================================================
 
+if use_sf and not calc_sf:
+    fit_x = [X_train, sf_train]
+else:
+    fit_x = X_train
+    
+if model == 'gaussian':
+    fit_y = X_train
+elif model == 'nb':
+    fit_y = [X_train, X_train]
+elif model == 'zinb':
+    fit_y = [X_train, X_train, X_train]
+
 # Pass adata.obs['sf'] as an input. 2nd, 3rd elements of y not used
-loss = autoencoder.fit(X_train,
-                       [X_train, X_train, X_train],
-                       epochs=epochs,
-                       batch_size=batch_size,
-                       shuffle=False,
-                       callbacks=[tensorboard])
+loss = autoencoder.fit(fit_x, fit_y, epochs=epochs, batch_size=batch_size,
+                       shuffle=False, callbacks=[tensorboard])
 
 autoencoder.save('AE.h5')
 
@@ -272,15 +335,40 @@ autoencoder.save('AE.h5')
 # Test model
 # =============================================================================
 
-encoded_data = encoder.predict(adata.X)
-decoded_data = decoder.predict([adata.obs['sf'].values, encoded_data])
+if use_sf:
+    if calc_sf:
+        encoded_data = encoder.predict(adata.X)
+        decoded_data = decoder.predict([encoded_data, adata.X])
+    else:
+        encoded_data = encoder.predict(adata.X)
+        decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values])
+else:
+    encoded_data = encoder.predict(adata.X)
+    decoded_data = decoder.predict(encoded_data)
 
 # adata.X = gene_scaler.inverse_transform(decoded_data[0])
 save_h5ad(adata, 'denoised')
 
 
+def test_sf():
+    
+    if calc_sf:
+        sf = sf_model.predict(adata.X)
+    else:
+        sf = sf_model.predict(adata.obs['sf'].values)
+        
+    return sf
 
-def test_model():
-    encoded_data = encoder.predict(X_train[0:batch_size])
-#    decoded_data = decoder.predict([adata.obs['sf'].values[0:batch_size], encoded_data])
-    decoded_data = decoder.predict([encoded_data, X_train[0:batch_size]])
+
+def test_AE():
+    
+    if use_sf:
+        if calc_sf:
+            encoded_data = encoder.predict(X_train[0:batch_size])
+            decoded_data = decoder.predict([encoded_data, X_train[0:batch_size]])
+        else:
+            encoded_data = encoder.predict(X_train[0:batch_size])
+            decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values[0:batch_size]])
+    else:
+        encoded_data = encoder.predict(X_train[0:batch_size])
+        decoded_data = decoder.predict(encoded_data)
