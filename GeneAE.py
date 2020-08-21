@@ -87,8 +87,10 @@ adata.obs['sf'].values[:] = sf_scaler.fit_transform(adata.obs['sf'].values.resha
 # scale = X.max(axis=0)
 # X = np.divide(X, scale)
 
-X_train, X_test = train_test_split(adata.X, train_size=train_size, shuffle=False)
-sf_train, sf_test = train_test_split(adata.obs['sf'].values, train_size = train_size, shuffle=False)
+X_train, X_test = train_test_split(adata.X, train_size=train_size, 
+                                   shuffle=False)
+sf_train, sf_test = train_test_split(adata.obs['sf'].values, 
+                                     train_size=train_size, shuffle=False)
 
 # =============================================================================
 # Build models
