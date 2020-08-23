@@ -381,9 +381,16 @@ def test_AE():
         
     return decoded_data
 
+# later will use latent representation for use_rep
 sc.tl.tsne(adata, use_rep='X', random_state=10, n_pcs=50)
 save_h5ad(adata, 'tsne')
 
 # TSNE plot of the decoded data, points labelled with ground truth cluster 
 # check this doesn't run all of main() in temp.py
 plotTSNE(adata, color=['clusters'])
+
+# compute the neighborhood graph
+sc.pp.neighbors(adata, use_rep='X', random_state=10, n_pcs=50)
+
+sc.tl.leiden(adata)
+groups = adata.obs['leiden']
