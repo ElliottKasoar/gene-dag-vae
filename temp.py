@@ -9,7 +9,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-adata = load_h5ad('raw')
 
 
 def display (obj, adata):
@@ -223,8 +222,8 @@ def calculate_sf(adata):
     size_factors = adata.obs['n_counts'] / np.mean(adata.X, axis=1)
     return size_factors
 
-
-def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, palette=sns.color_palette("deep"), plot_id = None):
+# [listVariables] is the list of variables you wish to plot
+def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, palette=sns.color_palette("deep"), plot_id = 'PCA'):
 
     print ('PLOT: pca')
 
@@ -301,28 +300,67 @@ def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, p
     sns.despine(offset=10, trim=False)
     plt.tight_layout()
 
-    save_figure ('PCA', f=fig)
+    save_figure (plot_id, f=fig)
     plt.close(fig)    
  
+def plotTSNE(adata, color, pointSize=150, height=8, palette=sns.color_palette("deep"), plot_id = 'TSNE'):
 
-adata = preprocessData(adata)
-print (adata.X.shape)
+    print ('PLOT: tsne')
 
-#adata.obs['static_sf'] = static_sf(adata)        # check this works
-adata.obs['sf'] = calculate_sf(adata)             # check this works
+    cols = len(color)
+    width  = height*cols
 
-save_h5ad(adata, 'preprocessed')
-
-display ({'adata.X':adata.X,
-    'adata.var':adata.var,
-    'adata.obs':adata.obs,
-    'adata.uns':adata.uns},
-    adata)
-
-#examine_adata (adata)
-
-#plotPCA(adata, listVariables=['n_counts'])        # need to revit this
+    fig, ax = plt.subplots(1, cols, figsize=(width,height))
 
 
+    # may change this so that color is a Dictionary
+    for i in range(len(color)):
+        # plt.subplots by default reduces array of Axes to a single axes if row and col=1
+        if cols==1:
+            sc.pl.tsne(adata,
+            color=color,
+            size=pointSize,
+            palette=palette,
+            ax=ax,
+            show=False)
+        
+        else:
+            sc.pl.tsne(adata,
+            color=color[i],
+            size=pointSize,
+            palette=palette,
+            ax=ax[i],
+            show=False)
+            
+    save_figure (plot_id, f=fig)
+    plt.close(fig)    
 
+def main():
+    adata = load_h5ad('raw')
+
+    adata = preprocessData(adata)
+    print (adata.X.shape)
+
+    #adata.obs['static_sf'] = static_sf(adata)
+    adata.obs['sf'] = calculate_sf(adata)
+
+    save_h5ad(adata, 'preprocessed')
+
+    display ({'adata.X':adata.X,
+              'adata.var':adata.var,
+              'adata.obs':adata.obs,
+              'adata.uns':adata.uns},
+              adata)
+
+    #examine_adata (adata)
+
+#    sc.tl.tsne(adata, use_rep='X', random_state=10, n_pcs=50)
+#    save_h5ad(adata, 'tsne')
+    adata=load_h5ad('tsne')
+    plotTSNE(adata, color=['clusters','tissue'])
+
+
+# for now, do this because we want to import some plots
+if __name__ == '__main__':
+    main()
 
