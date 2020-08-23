@@ -3,6 +3,7 @@
 
 from load import save_h5ad, load_h5ad
 #from loss import NB_loglikelihood
+from temp import save_figure, plotTSNE
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -350,6 +351,7 @@ else:
     encoded_data = encoder.predict(adata.X)
     decoded_data = decoder.predict(encoded_data)
 
+adata.X = decoded_data
 # adata.X = gene_scaler.inverse_transform(decoded_data[0])
 save_h5ad(adata, 'denoised')
 
@@ -378,3 +380,10 @@ def test_AE():
         decoded_data = decoder.predict(encoded_data)
         
     return decoded_data
+
+sc.tl.tsne(adata, use_rep='X', random_state=10, n_pcs=50)
+save_h5ad(adata, 'tsne')
+
+# TSNE plot of the decoded data, points labelled with ground truth cluster 
+# check this doesn't run all of main() in temp.py
+plotTSNE(adata, color=['clusters'])
