@@ -32,7 +32,6 @@ from keras.layers import multiply
 # tf.config.experimental_run_functions_eagerly(True)
 
 from time import time
-# from tensorflow.keras.callbacks import TensorBoard
 from keras.callbacks import TensorBoard
 
 if int(tf.__version__[0]) < 2:
@@ -60,8 +59,8 @@ encoding_dim = 256
 # Fraction of data used in training
 train_size = 0.7
 
-epochs = 2
-batch_size = 256
+epochs = 10
+batch_size = 16
 
 # =============================================================================
 # Load data
@@ -97,9 +96,10 @@ sf_train, sf_test = train_test_split(adata.obs['sf'].values,
 # =============================================================================
 
 use_sf = True
-calc_sf = True
-# model = 'zinb'
-model = 'nb'
+calc_sf_count = True
+calc_sf_obs = False
+model = 'zinb'
+# model = 'nb'
 #model = 'gaussian'
 
 # Encoder Model
@@ -113,21 +113,19 @@ encoder = Model(count_input, latent, name='encoder')
 plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
            show_shapes=True, show_layer_names=True)
 
-# Encoded representation of the input (with sparsity contraint via regularizer)
-# encoded = Dense(encoding_dim, activation='relu', 
-#                 activity_regularizer=regularizers.l1(10e-5))(VAE_input)
-
 # Size factors
 # try learning sf from the input data, hopefully will prevent factors from being so large
 #sf_input = Input(shape-input_shape, name='size_factor_input')
 if use_sf:
-    if calc_sf:
-        sf = Dense(1)(count_input)
+    if calc_sf_count:
+        sf = Dense(1, activation='relu')(count_input)
         sf_model = Model(count_input, sf, name='sf_model')
-    else:
+    elif calc_sf_obs:
         sf_input = Input(shape=(1,), name='size_factor_input')
-        sf = Dense(1)(sf_input)
+        sf = Dense(1, activation='relu')(sf_input)
         sf_model = Model(sf_input, sf, name='sf_model')
+    else:
+        sf = Input(shape=(1,), name='size_factor_input')
 
 # Decoder Model 
 # Lossy reconstruction of the input
@@ -155,10 +153,12 @@ elif model == 'nb' or model == 'zinb':
         mu_sf = multiply([mu, sf])
         decoder_outputs = [mu_sf, disp]
         
-        if calc_sf:
+        if calc_sf_count:
             decoder_inputs = [lat_input, count_input]
-        else:
+        elif calc_sf_obs:
             decoder_inputs = [lat_input, sf_input]
+        else:
+            decoder_inputs = [lat_input, sf]
             
     else:
         decoder_inputs = lat_input
@@ -178,12 +178,15 @@ plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
 # Autoencoder Model
 
 if use_sf:
-    if calc_sf:    
+    if calc_sf_count:    
         AE_inputs = count_input
         AE_outputs = decoder([encoder(count_input), count_input])
-    else:
+    elif calc_sf_obs:
         AE_inputs = [count_input, sf_input]
         AE_outputs = decoder([encoder(count_input), sf_input])
+    else:
+        AE_inputs = [count_input, sf]
+        AE_outputs = decoder([encoder(count_input), sf])
 else:
     AE_inputs = count_input
     AE_outputs = decoder(encoder(count_input))
@@ -224,6 +227,7 @@ def NB_loglikelihood(outputs):
 
 
 def ZINB_loglikelihood(outputs):
+    
     # return scalar loss for each data point 
     def loss (y_true, y_pred):
         
@@ -313,7 +317,7 @@ tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
 # Train model
 # =============================================================================
 
-if use_sf and not calc_sf:
+if use_sf and not calc_sf_count:
     fit_x = [X_train, sf_train]
 else:
     fit_x = X_train
@@ -336,7 +340,7 @@ autoencoder.save('AE.h5')
 # =============================================================================
 
 if use_sf:
-    if calc_sf:
+    if calc_sf_count:
         encoded_data = encoder.predict(adata.X)
         decoded_data = decoder.predict([encoded_data, adata.X])
     else:
@@ -352,7 +356,7 @@ save_h5ad(adata, 'denoised')
 
 def test_sf():
     
-    if calc_sf:
+    if calc_sf_count:
         sf = sf_model.predict(adata.X)
     else:
         sf = sf_model.predict(adata.obs['sf'].values)
@@ -363,7 +367,7 @@ def test_sf():
 def test_AE():
     
     if use_sf:
-        if calc_sf:
+        if calc_sf_count:
             encoded_data = encoder.predict(X_train[0:batch_size])
             decoded_data = decoder.predict([encoded_data, X_train[0:batch_size]])
         else:
