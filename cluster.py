@@ -29,34 +29,49 @@ def cluster(adata, stage='preprocessed', color='clusters', random_state=10,
     
     if save_data:
         save_h5ad(adata, 'clustered')
+    
+    return adata
 
 
 def cluster_accuracy(adata):
     
-    accuracy = []
+    accuracy_1 = []
+    accuracy_2 = []
     
     # categories = adata.obs['clusters'].cat.categories.tolist()
-    categories = adata.obs['clusters'].values.unique().tolist()
+    categories_1 = adata.obs['clusters'].values.unique().tolist()
     
-    for category in categories:
+    for category in categories_1:
         l_clusters = adata[adata.obs['clusters'] == category].obs['leiden'].value_counts()
-        accuracy.append(l_clusters.max() / l_clusters.sum())
+        accuracy_1.append(l_clusters.max() / l_clusters.sum())
         
-    return accuracy
+    # categories = adata.obs['clusters'].cat.categories.tolist()
+    categories_2 = adata.obs['leiden'].values.unique().tolist()
+    
+    for category in categories_2:
+        l_clusters = adata[adata.obs['leiden'] == category].obs['clusters'].value_counts()
+        accuracy_2.append(l_clusters.max() / l_clusters.sum())
+    
+    return accuracy_1, accuracy_2 
 
 
 # Preprocessed plots 
-cluster(load_h5ad('preprocessed'), stage='preprocessed', color='clusters')
-cluster(load_h5ad('preprocessed'), stage='preprocessed', color='leiden',
-        save_data=True)
+adata = load_h5ad('preprocessed')
 
-acc = cluster_accuracy(load_h5ad('clustered'))
-print(acc)
+adata = cluster(adata, stage='preprocessed', color='clusters')
+adata = cluster(adata, stage='preprocessed', color='leiden', save_data=True)
+
+acc1, acc2 = cluster_accuracy(adata)
+print(acc1)
+print(acc2)
+
 
 # Denoised plots
-cluster(load_h5ad('denoised'), stage='denoised', color='clusters')
-cluster(load_h5ad('denoised'), stage='denoised', color='leiden',
-        save_data=True)
+adata = load_h5ad('denoised')
 
-acc = cluster_accuracy(load_h5ad('clustered'))
-print(acc)
+adata = cluster(adata, stage='denoised', color='clusters')
+adata = cluster(adata, stage='denoised', color='leiden', save_data=True)
+
+acc3, acc4 = cluster_accuracy(adata)
+print(acc3)
+print(acc4)
