@@ -21,6 +21,8 @@ from keras import regularizers
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers import multiply
 
+import scanpy as sc
+
 # (Almost reproducible)
 # np.random.seed(1337)
 # tf.random.set_seed(1235)
@@ -60,8 +62,8 @@ encoding_dim = 256
 # Fraction of data used in training
 train_size = 0.7
 
-epochs = 10
-batch_size = 16
+epochs = 1
+batch_size = 256
 
 # =============================================================================
 # Load data
@@ -351,7 +353,7 @@ else:
     encoded_data = encoder.predict(adata.X)
     decoded_data = decoder.predict(encoded_data)
 
-adata.X = decoded_data
+adata.X = decoded_data[0]
 # adata.X = gene_scaler.inverse_transform(decoded_data[0])
 save_h5ad(adata, 'denoised')
 
@@ -380,17 +382,3 @@ def test_AE():
         decoded_data = decoder.predict(encoded_data)
         
     return decoded_data
-
-# later will use latent representation for use_rep
-sc.tl.tsne(adata, use_rep='X', random_state=10, n_pcs=50)
-save_h5ad(adata, 'tsne')
-
-# TSNE plot of the decoded data, points labelled with ground truth cluster 
-# check this doesn't run all of main() in temp.py
-plotTSNE(adata, color=['clusters'])
-
-# compute the neighborhood graph
-sc.pp.neighbors(adata, use_rep='X', random_state=10, n_pcs=50)
-
-sc.tl.leiden(adata)
-groups = adata.obs['leiden']

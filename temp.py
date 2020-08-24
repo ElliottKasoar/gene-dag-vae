@@ -333,7 +333,7 @@ def plotTSNE(adata, color, pointSize=150, height=8, palette=sns.color_palette("d
             show=False)
             
     save_figure (plot_id, f=fig)
-    plt.close(fig)    
+    plt.close(fig)
 
 def main():
     adata = load_h5ad('raw')
