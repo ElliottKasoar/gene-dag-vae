@@ -54,6 +54,7 @@ def examine_adata (adata):      # print out aggregates
 
 # code to create the directory 'plots' if it doesnt exist
 #base_dir = '.'
+# base_dir = '/home/chiaretta/performance/programming/github/GeneVAE'
 base_dir = '/Users/Elliott/Documents/GeneVAE'
 data_dir = base_dir + '/data'
 processed_dir = data_dir + '/processed'
@@ -102,15 +103,10 @@ def plotViolin(adata, keysDict={}, height=8, show=False):
 
     print ('PLOTTING: violin_plot')
 
-#    orig_show = show
     for idx, item in enumerate(keysDict):
         axis = ax if cols==1 else ax[idx]
+
         axis.set_title(f'total {item} per cell')
-
-#        if orig_show == True:
-#            if idx < len(keysDict)-1: show=False
-#            elif idx == len(keysDict)-1: show=True
-
         sc.pl.violin(adata, keysDict[item], ax=axis, show=False)
 
     if show==True: plt.show(fig)
@@ -133,13 +129,15 @@ def plotHistogram(adata, keysDict={}, bins=50, height=6, show=False):
 
         #axis.set_title(f'total {item} per cell')
         axis.set_title(f'{item}')
-        sns.distplot(adata.obs[keysDict[item][0]],
+
+        # To do: change this so the format is the same as plotViolin
+        #sns.distplot(adata.obs[keysDict[item][0]],
+        sns.distplot(keysDict[item][0],
                  bins=bins,
                  color='black',
                  hist=True,
                  kde=False,
                  ax=axis)
-        # To do: make sure 'None' argument works
         axis.axvline(x=keysDict[item][1], color='r', linestyle='--')
 
     if show==True: plt.show(fig)
@@ -169,45 +167,6 @@ def plotScatter(adata, pointSize=150, height=8, palette=sns.color_palette("deep"
     save_figure ('scatter', fig=fig)
     if show==True: plt.show(fig)
     plt.close(fig)
-
-
-def preprocessData(adata):
-
-#    plotHighestExprGenes(adata)
-
-    
-#    print (f'About to filter the cells: {adata.obs.keys().tolist()}')
-#    sc.pp.filter_cells(adata, min_genes=200)
-#    print (f'After filtering the cells: {adata.obs.keys().tolist()}')
-   
-    adata = adata[adata.obs.n_genes_expressed > 200, :]
-
-#    print (f'About to filter the genes: {adata.var.keys().tolist()}')
-#    sc.pp.filter_genes(adata, min_cells=3)
-#    print (f'After filtering the genes: {adata.var.keys().tolist()}')
-
-    adata = adata[:, adata.var['n_cells'] > 2]
-
-#    plotViolin(adata, {'number of gene counts':'n_counts',
-#               'number of genes expressed':'n_genes_expressed'})
-#    plotHistogram(adata)
-#    plotScatter(adata)
-
-    adata = adata[adata.obs.n_genes_expressed < 2500, :]
-    print ('after filtering, shape:', adata.X.shape)
-
-    sc.pp.normalize_total(adata, target_sum=1e4)    # normalize to 1e4 counts per cell so cells are comparable
-    sc.pp.log1p(adata)
-    
-    # identify highly variable genes
-#    sc.pp.highly_variable_genes(adata, min_mean=0.0125, max_mean=3, min_disp=0.5)
-#    sc.settings.figdir = './plots/'
-#    sc.pl.highly_variable_genes(adata, save=True)
-#
-#    adata.raw = adata
-#    adata = adata[:, adata.var.highly_variable]
-
-    return adata
 
 
 # this gives nan values since every cell has at least one zero count
@@ -346,11 +305,18 @@ def plotTSNE(adata, color, pointSize=150, height=8, palette=sns.color_palette("d
     if show==True: plt.show(fig)
     plt.close(fig)
 
+def preprocessData(adata):
+    adata = adata[adata.obs.n_genes_expressed > 200, :]
+    adata = adata[:, adata.var['n_cells'] > 2]
+    adata = adata[adata.obs.n_genes_expressed < 2500, :]
+    sc.pp.normalize_total(adata, target_sum=1e4)
+    sc.pp.log1p(adata)    
+
+    return adata
+
 def main():
     adata = load_h5ad('raw')
-
     adata = preprocessData(adata)
-    print (adata.X.shape)
 
     #adata.obs['static_sf'] = static_sf(adata)
     adata.obs['sf'] = calculate_sf(adata)
@@ -366,7 +332,5 @@ def main():
     #examine_adata (adata)
 
 
-# for now, do this because we want to import some plots
 if __name__ == '__main__':
     main()
-

@@ -57,13 +57,13 @@ for i in [plots_dir, models_dir]:
 # =============================================================================
 
 # Size of encoded representation
-encoding_dim = 256
+encoding_dim = 512
 
 # Fraction of data used in training
 train_size = 0.7
 
-epochs = 5
-batch_size = 32
+epochs = 10
+batch_size = 64
 
 # =============================================================================
 # Load data
@@ -77,7 +77,7 @@ input_shape = (input_dim,)
 
 # scaler = QuantileTransformer(n_quantiles=1000, output_distribution='normal')
 # scaler = StandardScaler()
-x = 1e-10
+x = 0
 gene_scaler = MinMaxScaler(feature_range=(x, 1-x))
 sf_scaler = MinMaxScaler(feature_range=(x, 1-x))
 
@@ -95,18 +95,19 @@ sf_train, sf_test = train_test_split(adata.obs['sf'].values,
                                      train_size=train_size, shuffle=False)
 
 
-
 # =============================================================================
 # Sampling
 # =============================================================================
 
 def sampling(args):
+    z_mean, z_log_var = args
     epsilon_std = 1.0
     epsilon_mean = 0.0
-    z_mean, z_log_sigma = args
-    epsilon = K.random_normal(shape=(batch_size, encoding_dim),
+    batch = K.shape(z_mean)[0]
+    dim = K.int_shape(z_mean)[1]
+    epsilon = K.random_normal(shape=(batch, dim),
                               mean=epsilon_mean, stddev=epsilon_std)
-    return z_mean + K.exp(z_log_sigma) * epsilon
+    return z_mean + K.exp(0.5 * z_log_var) * epsilon
 
 # =============================================================================
 # Build models
@@ -118,8 +119,12 @@ calc_sf_obs = False
 model = 'zinb'
 # model = 'nb'
 #model = 'gaussian'
+vae = True
 
+# =============================================================================
 # Encoder Model
+# =============================================================================
+
 count_input = Input(shape=input_shape, name='count_input')
 x = Dense(2048)(count_input)
 x = LeakyReLU(0.2)(x)
@@ -128,18 +133,24 @@ x = LeakyReLU(0.2)(x)
 x = Dense(512)(x)
 x = LeakyReLU(0.2)(x)
 
-z_mean = Dense(encoding_dim, name='latent_mean')(x)
-z_log_sigma = Dense(encoding_dim, name='latent_sigma')(x)
-z = Lambda(sampling, output_shape=(encoding_dim,))([z_mean, z_log_sigma])
+if vae:
+    z_mean = Dense(encoding_dim, name='latent_mean')(x)
+    z_log_var = Dense(encoding_dim, name='latent_log_var')(x)
+    z = Lambda(sampling, output_shape=(encoding_dim,))([z_mean, z_log_var])
+    encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
 
-encoder = Model(count_input, z_mean, name='encoder')
+else:
+    latent = Dense(encoding_dim, activation='relu', name='latent')(x)
+    encoder = Model(count_input, latent, name='encoder')
 
 plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
            show_shapes=True, show_layer_names=True)
 
+# =============================================================================
 # Size factors
-# try learning sf from the input data, hopefully will prevent factors from being so large
-#sf_input = Input(shape-input_shape, name='size_factor_input')
+# =============================================================================
+
+# Try learning sf from the input data
 if use_sf:
     if calc_sf_count:
         x = Dense(1024, activation='relu')(count_input)
@@ -155,7 +166,10 @@ if use_sf:
     else:
         sf = Input(shape=(1,), name='size_factor_input')
 
+# =============================================================================
 # Decoder Model 
+# =============================================================================
+
 # Lossy reconstruction of the input
 lat_input = Input(shape=(encoding_dim,))
 x = Dense(512)(lat_input)
@@ -207,21 +221,48 @@ decoder = Model(decoder_inputs, decoder_outputs, name='decoder')
 plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
            show_shapes=True, show_layer_names=True)         
 
+
+# =============================================================================
 # Autoencoder Model
+# =============================================================================
 
 if use_sf:
+    
     if calc_sf_count:    
+        
         AE_inputs = count_input
-        AE_outputs = decoder([encoder(count_input), count_input])
+        
+        if vae:
+            AE_outputs = decoder([encoder(count_input)[2], count_input])
+        else:
+            AE_outputs = decoder([encoder(count_input), count_input])
+   
     elif calc_sf_obs:
+        
         AE_inputs = [count_input, sf_input]
-        AE_outputs = decoder([encoder(count_input), sf_input])
+        
+        if vae:
+            AE_outputs = decoder([encoder(count_input)[2], sf_input])
+        else:
+            AE_outputs = decoder([encoder(count_input), sf_input])
+    
     else:
+        
         AE_inputs = [count_input, sf]
-        AE_outputs = decoder([encoder(count_input), sf])
+        
+        if vae:
+            AE_outputs = decoder([encoder(count_input)[2], sf])
+        else:
+            AE_outputs = decoder([encoder(count_input), sf])
+        
 else:
+    
     AE_inputs = count_input
-    AE_outputs = decoder(encoder(count_input))
+    
+    if vae:
+        AE_outputs = decoder(encoder(count_input)[2])
+    else:
+        AE_outputs = decoder(encoder(count_input))
 
 autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
 
@@ -233,114 +274,75 @@ plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
 # Define custom loss
 # =============================================================================
 
-def NB_loglikelihood(outputs):
+def NB_loglikelihood(mu, r, y, eps=1e-10):
     
-    def loss (y_true, y_pred):
-
-        eps = 1e-10 # Prevent NaN loss value?
-        
-        y = y_true
-        
-        mu = outputs[0]
-        r = outputs[1]
-        
-        if tf2_flag:
-            l1 = tf.math.lgamma(y+r+eps) - tf.math.lgamma(r+eps) - tf.math.lgamma(y+1.0)
-            l2 = y * tf.math.log((mu+eps)/(r+mu+eps)) + r * tf.math.log((r+eps)/(r+mu+eps))
-        else:
-            l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
-            l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
-        
-        log_likelihood = l1 + l2
-        
-        return  -K.sum(log_likelihood, axis=-1)
-    
-    return loss
-
-
-def ZINB_loglikelihood(outputs):
-    
-    # return scalar loss for each data point 
-    def loss (y_true, y_pred):
-        
-        eps = 1e-10 # Prevent NaN loss value?
-        
-        y = y_true
-        
-        mu = outputs[0]
-        r = outputs[1]
-        pi = outputs[2]
-        
-        if tf2_flag:
-            l1 = tf.math.lgamma(y+r+eps) - tf.math.lgamma(r+eps) - tf.math.lgamma(y+1.0)
-            l2 = y * tf.math.log((mu+eps)/(r+mu+eps)) + r * tf.math.log((r+eps)/(r+mu+eps))
-        else:
-            l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
-            l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
-        
-        nb_log_likelihood = l1 + l2
-
-        if tf2_flag:
-            case_zero = tf.math.log(eps + pi + (1.0 - pi) * tf.math.pow((r/(r+mu+eps)), r))
-            case_nonzero = tf.math.log(1.0 - pi + eps) + nb_log_likelihood
-        else:
-            case_zero = tf.log(pi + (1.0-pi) * tf.pow((r/(r+mu)), r))
-            case_nonzero = tf.log(1.0-pi) + nb_log_likelihood
-        
-        # whenever a count value < 1e-8, use case_zero for the log-likelihood
-        zinb_log_likelihood = tf.where(tf.less(y, 1e-8), case_zero, case_nonzero)
-        # return scalar for each cell; 
-        # cell likelihood = product of likelihoods over genes
-        return  -K.sum(zinb_log_likelihood, axis=1)
-    
-    return loss
-
-
-# Loss function run thrice (once for each output) but only one used
-if model == 'zinb':
-    autoencoder.compile(optimizer='adam',
-                        loss=ZINB_loglikelihood(AE_outputs),
-                        loss_weights=[1., 0.0, 0.0])
-
-if model == 'nb':
-    autoencoder.compile(optimizer='adam',
-                        loss=NB_loglikelihood(AE_outputs),
-                        loss_weights=[1., 0.0])
-
-# alternative method: add_loss does not require you to restrict the parameters
-# of the loss to y_pred and y_actual 
-# may change to this
-
-'''
-def NB_loglikelihood(y, mu, r):
-
     if tf2_flag:
-        l1 = tf.math.lgamma(y+r) - tf.math.lgamma(r) - tf.math.lgamma(y+1.0)
-        l2 = y * tf.math.log(mu/(r+mu)) + r * tf.math.log(r/(r+mu))
+        l1 = tf.math.lgamma(y+r+eps) - tf.math.lgamma(r+eps) - tf.math.lgamma(y+1.0)
+        l2 = y * tf.math.log((mu+eps)/(r+mu+eps)) + r * tf.math.log((r+eps)/(r+mu+eps))
     else:
-        l1 = tf.lgamma(y+r) - tf.lgamma(r) - tf.lgamma(y+1.0)
-        l2 = y * tf.log(mu/(r+mu)) + r * tf.log(r/(r+mu))
+        l1 = tf.lgamma(y+r+eps) - tf.lgamma(r+eps) - tf.lgamma(y+1.0)
+        l2 = y * tf.log((mu+eps)/(r+mu+eps)) + r * tf.log((r+eps)/(r+mu+eps))
     
     log_likelihood = l1 + l2
     
     return log_likelihood
 
 
-if model == 'nb':
-    reconstruction_loss = - K.sum(NB_loglikelihood(input, outputs[0],
-                                                    outputs[1]), axis=-1)
+def VAE_loss(outputs):
+    
+    def loss (y_true, y_pred):
 
-    print (K.print_tensor(NB_loglikelihood(input, outputs[0], outputs[1])))
-    print (K.print_tensor(reconstruction_loss))
+        eps = 1e-10 # Prevent NaN loss value?             
+        mu = outputs[0]
+        r = outputs[1]
+        y = y_true
 
-  autoencoder.add_loss(K.mean(reconstruction_loss))
-    autoencoder.add_loss(reconstruction_loss)
+        nb_log_likelihood = NB_loglikelihood(mu, r, y, eps)
+        
+        if model=='nb':
+            
+            to_sum = nb_log_likelihood
+        
+        else:
+            
+            pi = outputs[2]
+            
+            if tf2_flag:
+                case_zero = tf.math.log(eps + pi + (1.0 - pi) * tf.math.pow((r/(r+mu+eps)), r))
+                case_nonzero = tf.math.log(1.0 - pi + eps) + nb_log_likelihood
+            else:
+                case_zero = tf.log(pi + (1.0-pi) * tf.pow((r/(r+mu)), r))
+                case_nonzero = tf.log(1.0-pi) + nb_log_likelihood
+            
+            # whenever a count value < 1e-8, use case_zero for the log-likelihood
+            zinb_log_likelihood = tf.where(tf.less(y, 1e-8), case_zero, case_nonzero)
+            
+            to_sum = zinb_log_likelihood
+        
+        rec_loss = -K.sum(to_sum, axis=-1) 
+        total_loss = rec_loss
 
-    autoencoder.compile(optimizer='adam', loss=None)
-'''
+        if vae:
+            kl_loss = - 0.5 * K.sum(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
+            total_loss += kl_loss
+
+        return  total_loss
+    
+    return loss
+
+
+# Loss function run thrice (once for each output) but only one used
+if model == 'zinb':
+    loss_weights=[1., 0.0, 0.0]
+elif model == 'nb':
+    loss_weights=[1., 0.0]
 
 if model == 'gaussian':
     autoencoder.compile(optimizer='adam', loss='mse')
+else:
+    autoencoder.compile(optimizer='adam',
+                        loss=VAE_loss(AE_outputs),
+                        loss_weights=loss_weights)
 
 # from tb_callback import MyTensorBoard
 tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
@@ -371,15 +373,17 @@ autoencoder.save('AE.h5')
 # Test model
 # =============================================================================
 
-if use_sf:
-    if calc_sf_count:
-        encoded_data = encoder.predict(adata.X)
-        decoded_data = decoder.predict([encoded_data, adata.X])
-    else:
-        encoded_data = encoder.predict(adata.X)
-        decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values])
+if vae:
+    encoded_data = encoder.predict(adata.X)[0]
 else:
     encoded_data = encoder.predict(adata.X)
+
+if use_sf:    
+    if calc_sf_count:
+        decoded_data = decoder.predict([encoded_data, adata.X])
+    else:
+        decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values])
+else:
     decoded_data = decoder.predict(encoded_data)
 
 adata.X = decoded_data[0]
@@ -399,15 +403,17 @@ def test_sf():
 
 def test_AE():
     
-    if use_sf:
-        if calc_sf_count:
-            encoded_data = encoder.predict(X_train[0:batch_size])
-            decoded_data = decoder.predict([encoded_data, X_train[0:batch_size]])
-        else:
-            encoded_data = encoder.predict(X_train[0:batch_size])
-            decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values[0:batch_size]])
+    if vae:
+        encoded_data = encoder.predict(X_train[0:batch_size])[0]
     else:
         encoded_data = encoder.predict(X_train[0:batch_size])
+    
+    if use_sf:
+        if calc_sf_count:
+            decoded_data = decoder.predict([encoded_data, X_train[0:batch_size]])
+        else:            
+            decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values[0:batch_size]])
+    else:
         decoded_data = decoder.predict(encoded_data)
         
     return decoded_data
