@@ -65,6 +65,18 @@ acc1, acc2 = cluster_accuracy(adata)
 print(acc1)
 print(acc2)
 
+sc.tl.rank_genes_groups(adata, groupby='leiden', method='wilcoxon', corr_method='bonferroni')
+save_h5ad(adata, 'after_marker_genes')
+
+sc.pl.rank_genes_groups(adata, n_genes=25, sharey=False)
+sc.pl.rank_genes_groups_matrixplot(adata,
+                                   n_genes=25,
+                                   groupby='leiden',
+                                   use_raw=False,
+                                   swap_axes=True,
+                                   figsize=(30,50),
+                                   dendrogram=False)
+
 
 # Denoised plots
 adata = load_h5ad('denoised')
@@ -75,3 +87,17 @@ adata = cluster(adata, stage='denoised', color='leiden', save_data=True)
 acc3, acc4 = cluster_accuracy(adata)
 print(acc3)
 print(acc4)
+
+# Finding marker genes
+sc.tl.rank_genes_groups(adata, groupby='leiden', method='wilcoxon', corr_method='bonferroni')
+save_h5ad(adata, 'after_marker_genes')
+
+sc.pl.rank_genes_groups(adata, n_genes=25, sharey=False)
+sc.pl.rank_genes_groups_matrixplot(adata,
+                                   n_genes=25,
+                                   groupby='leiden',
+                                   use_raw=False,
+                                   swap_axes=True,
+                                   figsize=(30,50),
+                                   dendrogram=False)
+
