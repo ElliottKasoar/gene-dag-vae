@@ -23,7 +23,19 @@ except ImportError as error:
     print (error)
     sys.exit(1)
 
-file_path = './data/expression_mRNA_17-Aug-2014.txt'
+# need to give full path now when this is imported into Jupyter notebook
+#base_dir = '.'
+base_dir = '/home/chiaretta/performance/programming/github/GeneVAE'
+data_dir = base_dir + '/data'
+processed_dir = data_dir + '/processed'
+plots_dir = base_dir + '/plots'
+
+from pathlib import Path
+for i in [data_dir, processed_dir, plots_dir]:
+    Path(i).mkdir(parents=True, exist_ok=True)
+
+#file_path = './data/expression_mRNA_17-Aug-2014.txt'
+file_path = data_dir + '/expression_mRNA_17-Aug-2014.txt'
 
 
 def parse_args():
@@ -36,12 +48,9 @@ def parse_args():
 
     return parser.parse_args()
 
-args = parse_args()
-
-
 # load into Anndata object
-def load_data():
-    data = []
+def load_data(args):
+    counts = []
     gene_names = []
 
     with open(file_path, 'r') as file:
@@ -54,17 +63,18 @@ def load_data():
             if i == 8:
                 clusters = np.asarray(row, dtype=np.str)[2:]
             if i >= 11:
-                data.append(row[1:])
+                counts.append(row[1:])
                 gene_names.append(row[0])
             
+    # To do: remove these from here?
     cell_types, labels = np.unique(clusters, return_inverse=True)
     _, precise_labels = np.unique(precise_clusters, return_inverse=True)
 
-    X = np.array(data, dtype=np.int).T[1:]
-    #gene_names = np.asarray(gene_names, dtype=np.str)
+    X = np.array(counts, dtype=np.int).T[1:]
 
     var = pd.DataFrame(index=gene_names)
     obs = pd.DataFrame()                  
+
     obs['clusters'] = clusters           
     obs['tissue'] = tissue
     obs['n_counts'] = np.sum(X, axis=1)
@@ -75,12 +85,11 @@ def load_data():
         np.savetxt('X.txt', X, delimiter='\t', fmt='%i')
 
     adata = ad.AnnData(X, var=var, obs=obs, dtype='int32')
-    #adata_2 = ad.read_csv('X.txt', delimiter='\t', dtype='int32')
 
     return adata
 
 
-def debug_data(adata):
+def debug_data(adata, args):
     if args.verbose:
 #         print (f'there are {len(gene_names)} genes, {len(clusters)} cells, {len(cell_types)} cell types to recover which are:\n{", ".join(cell_types)}')
         cell_types = np.unique(adata.obs["clusters"], return_inverse=False)
@@ -103,8 +112,7 @@ def debug_data(adata):
 
 
 def get_h5ad_filename(id):
-    h5ad_filename = './data/adata_' + id + '.h5ad'        # need to make this consistent with processed_dir in temp.py
-    print (f'the filename is {h5ad_filename}')
+    h5ad_filename = processed_dir + '/adata_' + id + '.h5ad'
     return h5ad_filename
 
 
@@ -120,12 +128,14 @@ def load_h5ad(id):
 
 
 def main():
+    args = parse_args()
     print ('Running load.py')
-    adata = load_data()
-    debug_data(adata)
+
+    adata = load_data(args)
+    debug_data(adata, args)
     save_h5ad(adata, 'raw')
 
-
+# do not run the code when it is imported, unless adata_raw.h5ad does not exist
 if path.exists(get_h5ad_filename('raw')):
     if __name__ == '__main__':
         main()

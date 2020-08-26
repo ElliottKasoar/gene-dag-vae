@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 
-
 def display (obj, adata):
     [print (f"{item} has type:\t{type(obj[item])}") for item in obj]
     print (f'adata: {adata}')                # could replace everything with this?
@@ -54,7 +53,8 @@ def examine_adata (adata):      # print out aggregates
     #print (f'describe the genes:\n{adata.to_df().describe().iloc[:5]}')
 
 # code to create the directory 'plots' if it doesnt exist
-base_dir = '.'
+#base_dir = '.'
+base_dir = '/home/chiaretta/performance/programming/github/GeneVAE'
 data_dir = base_dir + '/data'
 processed_dir = data_dir + '/processed'
 plots_dir = base_dir + '/plots'
@@ -63,20 +63,16 @@ from pathlib import Path
 for i in [data_dir, processed_dir, plots_dir]:
     Path(i).mkdir(parents=True, exist_ok=True)
 
-"""
-if not os.path.exists(directory):
-    os.makedirs(directory, exist_ok=True)
-"""
 
-def save_figure (id, f=None, plt=None):
+def save_figure (id, fig=None, plt=None):
     filename = plots_dir + '/' + id + '.png'
-    if f is not None:
-        f.savefig(filename)
+    if fig is not None:
+        fig.savefig(filename)
     elif plt is not None:
         plt.savefig(filename)
 
     
-def plotHighestExprGenes(adata, n_top=20):
+def plotHighestExprGenes(adata, n_top=20, show=False):
 
     height = (n_top * 0.2) + 1.5
     width = 5
@@ -87,60 +83,73 @@ def plotHighestExprGenes(adata, n_top=20):
     sns.set(font_scale=1.5)
     sns.set_style("white")
 
-    print ('PLOT: highest_expr_genes')
+    print ('PLOTTING: highest_expr_genes')
 
     sc.pl.highest_expr_genes(adata, n_top=n_top, ax=ax, show=False)
 
     sns.despine(offset=10, trim=False)
     plt.tight_layout()
 
-    save_figure('highest_expr_genes', f=fig)
+    save_figure('highest_expr_genes', fig=fig)
+    if show==True: plt.show(fig)
     plt.close(fig)
     
 
-def plotViolin(adata, keysDict={}, height=8):
+def plotViolin(adata, keysDict={}, height=8, show=False):
 
     cols = len(keysDict)
-    width  = height*cols
-    fig, ax = plt.subplots(1,cols,figsize=(width,height))
+    fig, ax = plt.subplots(1,cols,figsize=(height*cols,height))
 
-    #sc.pl.violin(adata, ['n_counts', 'n_genes_expressed'])
-    print ('PLOT: violin_plot')
+    print ('PLOTTING: violin_plot')
 
+#    orig_show = show
     for idx, item in enumerate(keysDict):
-        ax[idx].set_title(f'total {item} per cell')
-        sc.pl.violin(adata, keysDict[item], ax=ax[idx], show=False)
+        axis = ax if cols==1 else ax[idx]
+        axis.set_title(f'total {item} per cell')
 
-    save_figure('violin_plot', f=fig)    
+#        if orig_show == True:
+#            if idx < len(keysDict)-1: show=False
+#            elif idx == len(keysDict)-1: show=True
+
+        sc.pl.violin(adata, keysDict[item], ax=axis, show=False)
+
+    if show==True: plt.show(fig)
+    save_figure('violin_plot', fig=fig)    
     plt.close(fig)
 
 
-# this is basically what the violin plot does anyway??    
-def plotHistogram(adata, bins=50):
+def plotHistogram(adata, keysDict={}, bins=50, height=6, show=False):
 
-    cols   = 1
-    height = 6
-
+    cols  = len(keysDict)
     fig, ax = plt.subplots(1,cols,figsize=(height*cols,height))
-    ax.set_title('number of genes expressed in each cell')
+
     sns.set(font_scale=1.5)
     sns.set_style("white")
 
-    print ('PLOT: histogram')
+    print ('PLOTTING: histogram')
 
-    sns.distplot(adata.obs['n_genes_expressed'],
-             bins=bins,
-             color='black',
-             hist=True,
-             kde=False,
-             ax=ax[0] if cols > 1 else ax)
+    for idx, item in enumerate(keysDict):
+        axis = ax if cols==1 else ax[idx]
 
-    save_figure('histogram', f=fig)  
+        #axis.set_title(f'total {item} per cell')
+        axis.set_title(f'{item}')
+        sns.distplot(adata.obs[keysDict[item][0]],
+                 bins=bins,
+                 color='black',
+                 hist=True,
+                 kde=False,
+                 ax=axis)
+        # To do: make sure 'None' argument works
+        axis.axvline(x=keysDict[item][1], color='r', linestyle='--')
+
+    if show==True: plt.show(fig)
+    save_figure('histogram', fig=fig)  
+    plt.close(fig)
 
     
-def plotScatter(adata, pointSize=150, height=8, palette=sns.color_palette("deep")):
+def plotScatter(adata, pointSize=150, height=8, palette=sns.color_palette("deep"), show=False):
 
-    print ('PLOT: scatter')
+    print ('PLOTTING: scatter')
 
     cols = 1
     width  = height*cols
@@ -149,14 +158,16 @@ def plotScatter(adata, pointSize=150, height=8, palette=sns.color_palette("deep"
     sns.set(font_scale=1.5)
     sns.set_style("white")
 
-    sc.pl.scatter(adata, x='n_counts', y='n_genes_expressed', color="tissue",
-              palette=palette, alpha=0.3, ax=ax, size=pointSize, show=False)
+    sc.pl.scatter(adata, x='n_counts', y='n_genes_expressed',
+                 color="tissue", palette=palette,
+                 alpha=0.3, ax=ax, size=pointSize, show=False)
 
 
     sns.despine(offset=10, trim=False)
     plt.tight_layout()
 
-    save_figure ('scatter', f=fig)
+    save_figure ('scatter', fig=fig)
+    if show==True: plt.show(fig)
     plt.close(fig)
 
 
@@ -225,7 +236,7 @@ def calculate_sf(adata):
 # [listVariables] is the list of variables you wish to plot
 def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, palette=sns.color_palette("deep"), plot_id = 'PCA'):
 
-    print ('PLOT: pca')
+    print ('PLOTTING: pca')
 
     if len(listVariables) > 1:
         rows = int(len(listVariables)/cols)
@@ -300,18 +311,17 @@ def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, p
     sns.despine(offset=10, trim=False)
     plt.tight_layout()
 
-    save_figure (plot_id, f=fig)
+    save_figure (plot_id, fig=fig)
     plt.close(fig)    
  
-def plotTSNE(adata, color, pointSize=150, height=8, palette=sns.color_palette("deep"), plot_id = 'TSNE'):
-
-    print ('PLOT: tsne')
+def plotTSNE(adata, color, pointSize=150, height=8, palette=sns.color_palette("deep"), plot_id = 'TSNE', show=False):
 
     cols = len(color)
     width  = height*cols
 
     fig, ax = plt.subplots(1, cols, figsize=(width,height))
 
+    print ('PLOTTING: tsne')
 
     # may change this so that color is a Dictionary
     for i in range(len(color)):
@@ -332,7 +342,8 @@ def plotTSNE(adata, color, pointSize=150, height=8, palette=sns.color_palette("d
             ax=ax[i],
             show=False)
             
-    save_figure (plot_id, f=fig)
+    save_figure (plot_id, fig=fig)
+    if show==True: plt.show(fig)
     plt.close(fig)
 
 def main():
