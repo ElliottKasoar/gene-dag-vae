@@ -100,14 +100,14 @@ sf_train, sf_test = train_test_split(adata.obs['sf'].values,
 # =============================================================================
 
 def sampling(args):
-    z_mean, z_log_var = args
+    mean, log_var = args
     epsilon_std = 1.0
     epsilon_mean = 0.0
-    batch = K.shape(z_mean)[0]
-    dim = K.int_shape(z_mean)[1]
+    batch = K.shape(mean)[0]
+    dim = K.int_shape(mean)[1]
     epsilon = K.random_normal(shape=(batch, dim),
                               mean=epsilon_mean, stddev=epsilon_std)
-    return z_mean + K.exp(0.5 * z_log_var) * epsilon
+    return mean + K.exp(0.5 * log_var) * epsilon
 
 # =============================================================================
 # Build models
@@ -122,7 +122,7 @@ model = 'zinb'
 vae = True
 
 # =============================================================================
-# Encoder Model
+# Encoder Model: count data
 # =============================================================================
 
 count_input = Input(shape=input_shape, name='count_input')
@@ -137,7 +137,7 @@ if vae:
     z_mean = Dense(encoding_dim, name='latent_mean')(x)
     z_log_var = Dense(encoding_dim, name='latent_log_var')(x)
     z = Lambda(sampling, output_shape=(encoding_dim,))([z_mean, z_log_var])
-    encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
+    encoder = Model(count_input, [z_mean, z_log_var, z], name='count encoder')
 
 else:
     latent = Dense(encoding_dim, activation='relu', name='latent')(x)
@@ -150,21 +150,44 @@ plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
 # Size factors
 # =============================================================================
 
-# Try learning sf from the input data
+# 1) learn sf from the input data (count): latent sf * z, given as input to decoder
+# 2) learn sf from an initial estimate (obs): latent sf * z, given as input to decoder
+# 3) use the initial estimate: sf * mu becomes the mean output of the decoder
 if use_sf:
     if calc_sf_count:
         x = Dense(1024, activation='relu')(count_input)
         x = LeakyReLU(0.2)(x)
         x = Dense(512)(x)
         x = LeakyReLU(0.2)(x)
-        sf = Dense(1, activation='sigmoid')(x)
-        sf_model = Model(count_input, sf, name='sf_model')
+        
+        if vae:
+            sf_mean = Dense(1, activation='relu', name='sf_latent_mean')(x)
+            sf_log_var = Dense(1, name='sf_latent_log_var')(x)
+            sf = Lambda(sampling, output_shape=(1,))([sf_mean, sf_log_var])
+            sf_encoder = Model(count_input, [sf_mean, sf_log_var, sf], name='sf_encoder')
+        else:
+            sf = Dense(1, name='sf_latent')(x)
+            sf_encoder = Model(count_input, sf, name='sf_encoder')
+
+
     elif calc_sf_obs:
         sf_input = Input(shape=(1,), name='size_factor_input')
-        sf = Dense(1, activation='relu')(sf_input)
-        sf_model = Model(sf_input, sf, name='sf_model')
+
+        if vae:
+            sf_mean = Dense(1, activation='relu', name='sf_latent_mean')(sf_input)
+            sf_log_var = Dense(1, name='sf_latent_log_var')(sf_input)
+            sf = Lambda(sampling, output_shape=(1,))([sf_mean, sf_log_var])
+            sf_encoder = Model(sf_input, [sf_mean, sf_log_var, sf], name='sf_encoder')
+        else:
+            sf = Dense(1, activation='relu')(sf_input)
+            sf_encoder = Model(sf_input, sf, name='sf_encoder')
+
     else:
         sf = Input(shape=(1,), name='size_factor_input')
+
+if use_sf:
+    plot_model(sf_model, to_file=models_dir + '/' + model + '_sf.png',
+           show_shapes=True, show_layer_names=True)         
 
 # =============================================================================
 # Decoder Model 
@@ -172,6 +195,11 @@ if use_sf:
 
 # Lossy reconstruction of the input
 lat_input = Input(shape=(encoding_dim,))
+
+if use_sf:
+    if calc_sf_count or calc_sf_obs:
+        x = multiply([lat_input, sf])
+
 x = Dense(512)(lat_input)
 x = LeakyReLU(0.2)(x)
 x = Dense(1024)(x)
@@ -190,26 +218,27 @@ elif model == 'nb' or model == 'zinb':
     mu = Dense(input_dim, activation = MeanAct, name='mu')(x)
     disp = Dense(input_dim, activation = DispAct, name='disp')(x)
 
-    # Multiply mu by sf here, broadcasting not done >> need to use K.repeat_elements
-    # sf_reshape = tf.reshape(sf, [-1,1]) # Column vector reshaped to row vector    
-    # sf = K.repeat_elements(sf, input_dim, 1)
-    # mu_sf = mu * sf_reshape # Multiply by sf here
-    
+    # decoder inputs
     if use_sf:
-        mu_sf = multiply([mu, sf])
-        decoder_outputs = [mu_sf, disp]
-        
         if calc_sf_count:
             decoder_inputs = [lat_input, count_input]
         elif calc_sf_obs:
             decoder_inputs = [lat_input, sf_input]
         else:
             decoder_inputs = [lat_input, sf]
-            
     else:
         decoder_inputs = lat_input
+
+    # decoder outputs
+    if use_sf:
+        if vae:
+            decoder_outputs = [mu, disp]
+        else:
+            mu_sf = multiply([mu, sf])
+            decoder_outputs = [mu_sf, disp]
+    else:
         decoder_outputs = [mu, disp]
-    
+
     if model == 'zinb':
         # Activation is sigmoid because values restricted to [0,1]
         pi = Dense(input_dim, activation = 'sigmoid', name='pi')(x)
@@ -270,6 +299,7 @@ print (autoencoder.summary())
 plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
            show_shapes=True, show_layer_names=True)         
 
+'''
 # =============================================================================
 # Define custom loss
 # =============================================================================
@@ -287,7 +317,12 @@ def NB_loglikelihood(mu, r, y, eps=1e-10):
     
     return log_likelihood
 
+# KL divergence between 2 Gaussians, one of which is N(0,1)
+def gaussian_kl_divergence(mean, log_var):
+    kl_loss = - 0.5 * 1 + log_var - K.square(mean) - K.exp(log_var)
+    return kl_loss
 
+# need to change this for sf?
 def VAE_loss(outputs):
     
     def loss (y_true, y_pred):
@@ -323,7 +358,7 @@ def VAE_loss(outputs):
         total_loss = rec_loss
 
         if vae:
-            kl_loss = - 0.5 * K.sum(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
+            kl_loss = K.sum(gaussian_kl_divergence(z_mean, z_log_var), axis=-1)
             total_loss += kl_loss
 
         return  total_loss
@@ -417,3 +452,5 @@ def test_AE():
         decoded_data = decoder.predict(encoded_data)
         
     return decoded_data
+
+'''
