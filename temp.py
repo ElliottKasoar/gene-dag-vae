@@ -192,15 +192,15 @@ def calculate_sf(adata):
     return size_factors
 
 # [listVariables] is the list of variables you wish to plot
-def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, palette=sns.color_palette("deep"), plot_id = 'PCA'):
+def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, palette=sns.color_palette("deep"), plot_id = 'PCA', show=False):
 
     print ('PLOTTING: pca')
 
     if len(listVariables) > 1:
         rows = int(len(listVariables)/cols)
 
-    if rows*cols < len(listVariables):
-        rows += 1
+        if rows*cols < len(listVariables):
+            rows += 1
         
     else:
         rows = 1
@@ -213,63 +213,40 @@ def plotPCA(adata, listVariables=[], pointSize=150, width=8, height=8, cols=2, p
     idx = 0
     for r in range(0, rows):
         for c in range(0, cols):
-        
+
             if idx > len(listVariables):
                 break
-        
+    
+            if cols==1 and rows==1:
+                axis=ax
+            elif cols==1 or rows==1:
+                axis=ax[idx]
+            else:
+                axis=ax[r,c] 
         
             var = listVariables[idx]
         
-            if cols == 1 and rows == 1:
-                if var == '':
-                    sc.pl.pca(adata,
-                    size=pointSize,
-                    palette=palette,
-                    ax=ax,
-                    show=False)
-                else:
-                    sc.pl.pca(adata,
-                    color=var,
-                    size=pointSize,
-                    palette=palette,
-                    ax=ax,
-                    show=False)
-            
-            elif cols == 1 or rows == 1:
-        
-                if var == '':
-                    sc.pl.pca(adata,
-                    size=pointSize,
-                    palette=palette,
-                    ax=ax[idx],
-                    show=False)
-                else:
-                    sc.pl.pca(adata,
-                    color=var,
-                    size=pointSize,
-                    palette=palette,
-                    ax=ax[idx],
-                    show=False)
+            if var == '':
+                sc.pl.pca(adata,
+                size=pointSize,
+                palette=palette,
+                ax=axis,
+                show=False)
             else:
-                if var == '':
-                    sc.pl.pca(adata,
-                    size=pointSize,
-                    palette=palette,
-                    ax=ax[r,c],
-                    show=False)
-                else:
-                    sc.pl.pca(adata,
-                    color=var,
-                    size=pointSize,
-                    palette=palette,
-                    ax=ax[r,c],
-                    show=False)
-        idx += 1
+                sc.pl.pca(adata,
+                color=var,
+                size=pointSize,
+                palette=palette,
+                ax=axis,
+                show=False)
+            
+            idx += 1
         
     sns.despine(offset=10, trim=False)
     plt.tight_layout()
 
     save_figure (plot_id, fig=fig)
+    if show==True: plt.show(fig)
     plt.close(fig)    
  
 def plotTSNE(adata, color, pointSize=150, height=8, palette=sns.color_palette("deep"), plot_id = 'TSNE', show=False):
