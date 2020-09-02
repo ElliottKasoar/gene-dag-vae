@@ -141,6 +141,7 @@ cython_debug/
 logs/
 
 # Plots
+*.png
 plots/
 
 # Large files
