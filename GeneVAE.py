@@ -304,7 +304,7 @@ def ZINB_loglikelihood(mu, r, pi, y, eps):
 
 # KL divergence between 2 Gaussians, one of which is N(0,1)
 def gaussian_kl_z(mean, log_var):
-    kl = - 0.5 * K.sum(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
+    kl = - 0.5 * K.sum(1 + log_var - K.square(mean) - K.exp(log_var), axis=-1)
     return kl
 
 
