@@ -37,10 +37,10 @@ import scanpy as sc
 from time import time
 from keras.callbacks import TensorBoard
 
-if int(tf.__version__[0]) < 2:
-    tf2_flag = False
-else:
+if int(tf.__version__[0]) == 2:
     tf2_flag = True
+else:
+    tf2_flag = False
 
 # To do: move this
 # create directory 'models' if it doesn't exist
@@ -152,7 +152,7 @@ plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
 
 if use_sf:
     if learn_sf:
-        x = Dense(1024, activation='relu')(count_input)
+        x = Dense(1024)(count_input)
         x = LeakyReLU(0.2)(x)
         x = Dense(512)(x)
         x = LeakyReLU(0.2)(x)
@@ -193,7 +193,9 @@ elif model == 'nb' or model == 'zinb':
 
     MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
     DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
+    sfAct = Lambda(lambda l: K.exp(l), name = 'expzsf')
 
+    
     mu = Dense(input_dim, activation = MeanAct, name='mu')(x)
     disp = Dense(input_dim, activation = DispAct, name='disp')(x)
 
@@ -205,14 +207,15 @@ elif model == 'nb' or model == 'zinb':
             decoder_inputs = [lat_input, sf]
     else:
         decoder_inputs = lat_input
-
+    
     # decoder outputs
     if use_sf:
+        sf = sfAct(sf)
         mu_sf = multiply([mu, sf])
         decoder_outputs = [mu_sf, disp]
     else:
         decoder_outputs = [mu, disp]
-
+    
     if model == 'zinb':
         # Activation is sigmoid because values restricted to [0,1]
         pi = Dense(input_dim, activation = 'sigmoid', name='pi')(x)
@@ -228,7 +231,7 @@ plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
 # =============================================================================
 # Autoencoder Model
 # =============================================================================
-# connect encoder and decoder models 
+# Connect encoder and decoder models 
 if use_sf:
     
     if learn_sf:    
@@ -276,14 +279,14 @@ def NB_loglikelihood(mu, r, y, eps=1e-10):
     else:
         l1 = tf.lgamma(y+r+eps) - tf.lgamma(r+eps) - tf.lgamma(y+1.0)
         l2 = y * tf.log((mu+eps)/(r+mu+eps)) + r * tf.log((r+eps)/(r+mu+eps))
-
+    
     log_likelihood = l1 + l2
     
     return log_likelihood
-    
+
 
 def ZINB_loglikelihood(mu, r, pi, y, eps):
-
+    
     nb_log_likelihood = NB_loglikelihood(mu, r, y, eps)
     
     if tf2_flag:
@@ -293,20 +296,27 @@ def ZINB_loglikelihood(mu, r, pi, y, eps):
         case_zero = tf.log(pi + (1.0-pi) * tf.pow((r/(r+mu)), r))
         case_nonzero = tf.log(1.0-pi) + nb_log_likelihood
     
-    # whenever a count value < 1e-8, use case_zero for the log-likelihood
+    # If count value < 1e-8, use case_zero for the log-likelihood
     zinb_log_likelihood = tf.where(tf.less(y, 1e-8), case_zero, case_nonzero)
-
+    
     return zinb_log_likelihood
+
 
 # KL divergence between 2 Gaussians, one of which is N(0,1)
 def gaussian_kl_z(mean, log_var):
-    kl = - 0.5 * 1 + log_var - K.square(mean) - K.exp(log_var)
+    kl = - 0.5 * K.sum(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
     return kl
+
 
 # https://github.com/tensorflow/probability/blob/master/tensorflow_probability/python/distributions/kullback_leibler.py
 # KL divergence between 2 Gaussians, g1 and g2
 def gaussian_kl(g1, g2):
-    ds = tf.contrib.distributions
+    
+    if tf2_flag:
+        import tensorflow_probability as tfp
+        ds = tfp.distributions
+    else:
+        ds = tf.contrib.distributions
     g1 = ds.Normal(loc=g1[0], scale=g1[1])
     g2 = ds.Normal(loc=g2[0], scale=g2[1])
     kl = ds.kl_divergence(g1, g2)
@@ -317,36 +327,37 @@ def gaussian_kl(g1, g2):
 def VAE_loss(outputs):
     
     def loss (y_true, y_pred):
-
-        eps = 1e-10           # Prevent NaN loss value             
+        
+        eps = 1e-10  # Prevent NaN loss value             
         mu = outputs[0]
         r = outputs[1]
         y = y_true
-
+        
         if model=='nb':
             to_sum = - NB_loglikelihood(mu, r, y, eps)
         
         elif model=='zinb':
             pi = outputs[2]
             to_sum = - ZINB_loglikelihood(mu, r, pi, y, eps)
-
-        total_loss = K.sum(to_sum, axis=-1)
         
+        total_loss = K.sum(to_sum, axis=-1)
+                
         if vae:
             kl_loss = gaussian_kl_z(z_mean, z_log_var)
             total_loss += kl_loss
-
-        if use_sf and learn_sf:
-            log_counts = np.log(adata.obs['n_counts'])
-            ones = np.ones((adata.X.shape[0],1)).astype(np.float32)
-
-            m = np.mean(log_counts) * ones
-            v = np.var(log_counts) * ones
-
-            sf_kl_loss = gaussian_kl([sf_mean, sf_log_var], [m, v])
-            total_loss += sf_kl_loss
-
-        return  total_loss
+        
+        # Currently wrong shape - need sample?
+        # if use_sf and learn_sf:
+        #     log_counts = np.log(adata.obs['n_counts'])
+        #     ones = np.ones((adata.X.shape[0],1)).astype(np.float32)
+            
+        #     m = np.mean(log_counts) * ones
+        #     v = np.var(log_counts) * ones
+            
+        #     sf_kl_loss = gaussian_kl([sf_mean, sf_log_var], [m, v])
+        #     total_loss += sf_kl_loss
+        
+        return total_loss
     
     return loss
 
@@ -398,7 +409,7 @@ if vae:
 else:
     encoded_data = encoder.predict(adata.X)
 
-if use_sf:    
+if use_sf:
     if learn_sf:
         decoded_data = decoder.predict([encoded_data, adata.X])
     else:
@@ -414,10 +425,10 @@ save_h5ad(adata, 'denoised')
 def test_sf():
     
     if learn_sf:
-        sf = sf_model.predict(adata.X)
+        sf = sf_encoder.predict(adata.X)
     else:
-        sf = sf_model.predict(adata.obs['sf'].values)
-        
+        sf = sf_encoder.predict(adata.obs['sf'].values)
+    
     return sf
 
 
@@ -435,6 +446,5 @@ def test_AE():
             decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values[0:batch_size]])
     else:
         decoded_data = decoder.predict(encoded_data)
-        
+    
     return decoded_data
-
