@@ -15,7 +15,7 @@ import tensorflow as tf
 import keras.backend as K
 
 from keras.utils import plot_model
-from keras.layers import Input, Dense
+from keras.layers import Input, Dense, BatchNormalization, Dropout
 from keras.models import Model
 from keras import regularizers
 from keras.layers.advanced_activations import LeakyReLU
@@ -61,16 +61,32 @@ for i in [plots_dir, models_dir]:
 # Model parameters
 # =============================================================================
 
-# Size of encoded representation
-encoding_dim = 10
+latent_dim = 32 # Size of encoded representation
 
-# Fraction of data used in training
-train_size = 0.9
+train_size = 0.9 # Fraction of data used in training
 
-epochs = 100
-batch_size = 256
+epochs = 200
+batch_size = 512
 
-lr = 0.001
+beta_vae = 2
+
+gene_layers = 3 # Hidden layers between input and latent layers
+gene_nodes = 512 # Size of initial hidden layer
+gene_flat = False # Keep all hidden layers flat (else halve each layer)
+gene_alpha = 0.2 # LeakyReLU alpha
+gene_momentum=0.8 # BatchNorm momentum
+gene_dropout = 0.2 # Dropout rate
+
+sf_layers = 4 # Hidden layers between input and latent layers
+sf_nodes = 1024 # Size of initial hidden layer (half each layer)
+sf_alpha = 0.2 # LeakyReLU alpha
+momentum=sf_momentum=0.8 # BatchNorm momentum
+sf_dropout = 0.2 # Dropout rate
+
+# Adam optimiser parameters
+lr = 0.0005 #Default = 0.001 (Adam default = 0.001)
+beta_1=0.75 # Default = 0.9 (Adam default = 0.9)
+beta_2=0.99 # Default = 0.999 (Adam default = 0.999)
 
 # =============================================================================
 # Load data
@@ -133,21 +149,34 @@ vae = True
 # =============================================================================
 
 count_input = Input(shape=input_shape, name='count_input')
-x = Dense(128)(count_input)
-x = LeakyReLU(0.2)(x)
-# x = Dense(1024)(x)
-# x = LeakyReLU(0.2)(x)
-# x = Dense(512)(x)
-# x = LeakyReLU(0.2)(x)
+x = Dense(gene_nodes)(count_input)
+x = BatchNormalization(momentum=gene_momentum)(x)
+x = LeakyReLU(gene_alpha)(x)
+x = Dropout(gene_dropout)(x)
+
+for i in range(1, gene_layers):
+    
+    if gene_flat:
+        nodes = gene_nodes
+    else:
+        nodes = gene_nodes // (2**i)
+        if nodes < latent_dim:
+            print("Warning: layer has fewer nodes than latent layer")
+            print(f'Layer nodes: {nodes}. Latent nodes: {latent_dim}')
+    
+    x = Dense(nodes)(x)
+    x = BatchNormalization(momentum=gene_momentum)(x)
+    x = LeakyReLU(gene_alpha)(x)
+    x = Dropout(gene_dropout)(x)
 
 if vae:
-    z_mean = Dense(encoding_dim, name='latent_mean')(x)
-    z_log_var = Dense(encoding_dim, name='latent_log_var')(x)
-    z = Lambda(sampling, output_shape=(encoding_dim,))([z_mean, z_log_var])
+    z_mean = Dense(latent_dim, name='latent_mean')(x)
+    z_log_var = Dense(latent_dim, name='latent_log_var')(x)
+    z = Lambda(sampling, output_shape=(latent_dim,))([z_mean, z_log_var])
     encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
 
 else:
-    latent = Dense(encoding_dim, activation='relu', name='latent')(x)
+    latent = Dense(latent_dim, activation='relu', name='latent')(x)
     encoder = Model(count_input, latent, name='encoder')
 
 plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
@@ -159,10 +188,18 @@ plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
 
 if use_sf:
     if learn_sf:
-        x = Dense(1024)(count_input)
-        x = LeakyReLU(0.2)(x)
-        x = Dense(512)(x)
-        x = LeakyReLU(0.2)(x)
+        
+        x = Dense(sf_nodes)(count_input)
+        x = BatchNormalization(momentum=sf_momentum)(x)
+        x = LeakyReLU(sf_alpha)(x)
+        x = Dropout(sf_dropout)(x)
+        
+        for i in range(1, sf_layers):
+            nodes = sf_nodes // (2**i)
+            x = Dense(nodes)(x)
+            x = BatchNormalization(momentum=sf_momentum)(x)
+            x = LeakyReLU(sf_alpha)(x)
+            x = Dropout(sf_dropout)(x)
         
         if vae:
             sf_mean = Dense(1, name='sf_mean')(x)
@@ -185,13 +222,28 @@ if use_sf:
 # =============================================================================
 
 # Lossy reconstruction of the input
-lat_input = Input(shape=(encoding_dim,))
-x = Dense(128)(lat_input)
-x = LeakyReLU(0.2)(x)
-# x = Dense(1024)(x)
-# x = LeakyReLU(0.2)(x)
-# x = Dense(2048)(x)
-# x = LeakyReLU(0.2)(x)
+lat_input = Input(shape=(latent_dim,))
+
+if gene_flat:
+    x = Dense(gene_nodes)(lat_input)
+else:
+    nodes = gene_nodes // (2 ** (gene_layers - 1))
+    x = Dense(nodes)(lat_input)
+
+x = BatchNormalization(momentum=gene_momentum)(x)
+x = LeakyReLU(gene_alpha)(x)
+x = Dropout(gene_dropout)(x)
+
+for i in range(1, gene_layers):
+    if gene_flat:
+        nodes = gene_nodes
+    else:
+        nodes = gene_nodes // (2 ** (gene_layers - (i+1)))
+
+    x = Dense(nodes)(x)
+    x = BatchNormalization(momentum=gene_momentum)(x)
+    x = LeakyReLU(gene_alpha)(x)
+    x = Dropout(gene_dropout)(x)
 
 if model == 'gaussian': 
     decoder_outputs = Dense(input_dim, activation='sigmoid')(x)
@@ -352,7 +404,7 @@ def VAE_loss(outputs):
         
         # KL loss for gene expressions
         if vae:
-            kl_loss = gaussian_kl_z(z_mean, z_log_var)
+            kl_loss = beta_vae * gaussian_kl_z(z_mean, z_log_var)
             total_loss += kl_loss
         
         # KL loss for size factors
@@ -360,14 +412,14 @@ def VAE_loss(outputs):
             log_counts = np.log(adata.obs['n_counts'])
             
             # ones_shape = batch_size
-            ones_shape = tf.shape(y_pred)[0]
+            ones_shape = K.shape(y_pred)[0]
             
             ones = tf.ones((ones_shape, 1))
             
             m = np.mean(log_counts) * ones
             v = np.var(log_counts) * ones
             
-            sf_kl_loss = gaussian_kl([sf_mean, sf_log_var], [m, v])
+            sf_kl_loss = beta_vae * gaussian_kl([sf_mean, sf_log_var], [m, v])
             total_loss += sf_kl_loss
         
         return total_loss
@@ -381,7 +433,7 @@ if model == 'zinb':
 elif model == 'nb':
     loss_weights=[1., 0.0]
 
-opt = Adam(lr=lr) 
+opt = Adam(lr=lr, beta_1=beta_1, beta_2=beta_2)
 
 if model == 'gaussian':
     autoencoder.compile(optimizer=opt, loss='mse')
@@ -399,19 +451,25 @@ tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
 
 if use_sf and not learn_sf:
     fit_x = [X_train, sf_train]
+    val_x = [X_test, X_test]
 else:
     fit_x = X_train
+    val_x = X_test
     
 if model == 'gaussian':
     fit_y = X_train
+    val_y = X_test
 elif model == 'nb':
     fit_y = [X_train, X_train]
+    val_y = [X_test, X_test]
 elif model == 'zinb':
     fit_y = [X_train, X_train, X_train]
+    val_y = [X_test, X_test, X_test]
 
 # Pass adata.obs['sf'] as an input. 2nd, 3rd elements of y not used
 loss = autoencoder.fit(fit_x, fit_y, epochs=epochs, batch_size=batch_size,
-                       shuffle=False, callbacks=[tensorboard])
+                       shuffle=False, callbacks=[tensorboard],
+                       validation_data=(val_x, val_y))
 
 autoencoder.save('AE.h5')
 
@@ -421,6 +479,7 @@ autoencoder.save('AE.h5')
 # =============================================================================
 
 plt.plot(loss.history['loss'])
+plt.plot(loss.history['val_loss'])
 
 # =============================================================================
 # Test model
