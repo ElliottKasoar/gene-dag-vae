@@ -20,6 +20,7 @@ from keras.models import Model
 from keras import regularizers
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers import multiply, Lambda
+from keras.optimizers import Adam
 
 import scanpy as sc
 
@@ -27,10 +28,14 @@ import scanpy as sc
 # np.random.seed(1337)
 # tf.random.set_seed(1234)
 
-# from tensorflow.python import debug as tf_debug
-# sess = K.get_session()
-# sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-# K.set_session(sess)
+debug = False
+
+if debug:
+    from tensorflow.python import debug as tf_debug
+    sess = K.get_session()
+    # sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+    sess = tf_debug.LocalCLIDebugWrapperSession(sess, ui_type="readline") #Spyder
+    K.set_session(sess)
 
 # tf.config.experimental_run_functions_eagerly(True)
 
@@ -57,13 +62,15 @@ for i in [plots_dir, models_dir]:
 # =============================================================================
 
 # Size of encoded representation
-encoding_dim = 512
+encoding_dim = 10
 
 # Fraction of data used in training
-train_size = 0.7
+train_size = 0.9
 
-epochs = 10
-batch_size = 64
+epochs = 100
+batch_size = 256
+
+lr = 0.001
 
 # =============================================================================
 # Load data
@@ -126,12 +133,12 @@ vae = True
 # =============================================================================
 
 count_input = Input(shape=input_shape, name='count_input')
-x = Dense(2048)(count_input)
+x = Dense(128)(count_input)
 x = LeakyReLU(0.2)(x)
-x = Dense(1024)(x)
-x = LeakyReLU(0.2)(x)
-x = Dense(512)(x)
-x = LeakyReLU(0.2)(x)
+# x = Dense(1024)(x)
+# x = LeakyReLU(0.2)(x)
+# x = Dense(512)(x)
+# x = LeakyReLU(0.2)(x)
 
 if vae:
     z_mean = Dense(encoding_dim, name='latent_mean')(x)
@@ -179,27 +186,27 @@ if use_sf:
 
 # Lossy reconstruction of the input
 lat_input = Input(shape=(encoding_dim,))
-x = Dense(512)(lat_input)
+x = Dense(128)(lat_input)
 x = LeakyReLU(0.2)(x)
-x = Dense(1024)(x)
-x = LeakyReLU(0.2)(x)
-x = Dense(2048)(x)
-x = LeakyReLU(0.2)(x)
+# x = Dense(1024)(x)
+# x = LeakyReLU(0.2)(x)
+# x = Dense(2048)(x)
+# x = LeakyReLU(0.2)(x)
 
 if model == 'gaussian': 
     decoder_outputs = Dense(input_dim, activation='sigmoid')(x)
 
 elif model == 'nb' or model == 'zinb':
 
+    # Must ensures all values positive since loss takes logs etc.
     MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
     DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
-    sfAct = Lambda(lambda l: K.exp(l), name = 'expzsf')
+    sfAct = Lambda(lambda a: K.exp(a), name = 'expzsf')
 
-    
     mu = Dense(input_dim, activation = MeanAct, name='mu')(x)
     disp = Dense(input_dim, activation = DispAct, name='disp')(x)
 
-    # decoder inputs
+    # Decoder inputs
     if use_sf:
         if learn_sf:
             decoder_inputs = [lat_input, count_input]
@@ -208,10 +215,10 @@ elif model == 'nb' or model == 'zinb':
     else:
         decoder_inputs = lat_input
     
-    # decoder outputs
+    # Decoder outputs
     if use_sf:
         sf = sfAct(sf)
-        mu_sf = multiply([mu, sf])
+        mu_sf = multiply([mu, sf]) # Uses broadcasting
         decoder_outputs = [mu_sf, disp]
     else:
         decoder_outputs = [mu, disp]
@@ -285,7 +292,7 @@ def NB_loglikelihood(mu, r, y, eps=1e-10):
     return log_likelihood
 
 
-def ZINB_loglikelihood(mu, r, pi, y, eps):
+def ZINB_loglikelihood(mu, r, pi, y, eps=1e-10):
     
     nb_log_likelihood = NB_loglikelihood(mu, r, y, eps)
     
@@ -304,8 +311,8 @@ def ZINB_loglikelihood(mu, r, pi, y, eps):
 
 # KL divergence between 2 Gaussians, one of which is N(0,1)
 def gaussian_kl_z(mean, log_var):
-    kl = - 0.5 * K.sum(1 + log_var - K.square(mean) - K.exp(log_var), axis=-1)
-    return kl
+    kl = - 0.5 * (1 + log_var - K.square(mean) - K.exp(log_var))
+    return K.sum(kl, axis=-1)
 
 
 # https://github.com/tensorflow/probability/blob/master/tensorflow_probability/python/distributions/kullback_leibler.py
@@ -320,15 +327,15 @@ def gaussian_kl(g1, g2):
     g1 = ds.Normal(loc=g1[0], scale=g1[1])
     g2 = ds.Normal(loc=g2[0], scale=g2[1])
     kl = ds.kl_divergence(g1, g2)
-
-    return kl
+    
+    return K.sum(kl, axis=-1)
 
 
 def VAE_loss(outputs):
     
     def loss (y_true, y_pred):
         
-        eps = 1e-10  # Prevent NaN loss value             
+        eps = 1e-10 # Prevent NaN loss value
         mu = outputs[0]
         r = outputs[1]
         y = y_true
@@ -344,18 +351,22 @@ def VAE_loss(outputs):
                 
         if vae:
             kl_loss = gaussian_kl_z(z_mean, z_log_var)
-            total_loss += kl_loss
+            total_loss += kl_loss    
         
         # Currently wrong shape - need sample?
-        # if use_sf and learn_sf:
-        #     log_counts = np.log(adata.obs['n_counts'])
-        #     ones = np.ones((adata.X.shape[0],1)).astype(np.float32)
+        if use_sf and learn_sf:
+            log_counts = np.log(adata.obs['n_counts'])
             
-        #     m = np.mean(log_counts) * ones
-        #     v = np.var(log_counts) * ones
+            # ones_shape = batch_size
+            ones_shape = tf.shape(y_pred)[0]
             
-        #     sf_kl_loss = gaussian_kl([sf_mean, sf_log_var], [m, v])
-        #     total_loss += sf_kl_loss
+            ones = tf.ones((ones_shape, 1))
+            
+            m = np.mean(log_counts) * ones
+            v = np.var(log_counts) * ones
+            
+            sf_kl_loss = gaussian_kl([sf_mean, sf_log_var], [m, v])
+            total_loss += sf_kl_loss
         
         return total_loss
     
@@ -368,10 +379,12 @@ if model == 'zinb':
 elif model == 'nb':
     loss_weights=[1., 0.0]
 
+opt = Adam(lr=lr) 
+
 if model == 'gaussian':
-    autoencoder.compile(optimizer='adam', loss='mse')
+    autoencoder.compile(optimizer=opt, loss='mse')
 else:
-    autoencoder.compile(optimizer='adam',
+    autoencoder.compile(optimizer=opt,
                         loss=VAE_loss(AE_outputs),
                         loss_weights=loss_weights)
 
@@ -399,6 +412,13 @@ loss = autoencoder.fit(fit_x, fit_y, epochs=epochs, batch_size=batch_size,
                        shuffle=False, callbacks=[tensorboard])
 
 autoencoder.save('AE.h5')
+
+
+# =============================================================================
+# Plot loss
+# =============================================================================
+
+plt.plot(loss.history['loss'])
 
 # =============================================================================
 # Test model
