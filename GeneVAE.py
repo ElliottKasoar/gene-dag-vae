@@ -340,6 +340,7 @@ def VAE_loss(outputs):
         r = outputs[1]
         y = y_true
         
+        # Reconstruction loss for NB/ZINB distribution
         if model=='nb':
             to_sum = - NB_loglikelihood(mu, r, y, eps)
         
@@ -348,12 +349,13 @@ def VAE_loss(outputs):
             to_sum = - ZINB_loglikelihood(mu, r, pi, y, eps)
         
         total_loss = K.sum(to_sum, axis=-1)
-                
+        
+        # KL loss for gene expressions
         if vae:
             kl_loss = gaussian_kl_z(z_mean, z_log_var)
-            total_loss += kl_loss    
+            total_loss += kl_loss
         
-        # Currently wrong shape - need sample?
+        # KL loss for size factors
         if use_sf and learn_sf:
             log_counts = np.log(adata.obs['n_counts'])
             
