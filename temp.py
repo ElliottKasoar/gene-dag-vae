@@ -54,7 +54,8 @@ def examine_adata (adata):      # print out aggregates
 
 # code to create the directory 'plots' if it doesnt exist
 #base_dir = '.'
-base_dir = '/home/chiaretta/performance/programming/github/GeneVAE'
+# base_dir = '/home/chiaretta/performance/programming/github/GeneVAE'
+base_dir = '/Users/Elliott/Documents/GeneVAE'
 data_dir = base_dir + '/data'
 processed_dir = data_dir + '/processed'
 plots_dir = base_dir + '/plots'
@@ -310,4 +311,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

@@ -141,6 +141,7 @@ cython_debug/
 logs/
 
 # Plots
+*.png
 plots/
 
 # Large files
@@ -148,3 +149,6 @@ plots/
 *.hdf5
 *.h5ad
 *.txt
+
+# Out files
+out

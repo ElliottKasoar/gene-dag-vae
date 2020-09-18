@@ -56,14 +56,15 @@ def cluster_accuracy(adata):
 
 
 # Preprocessed plots 
-adata = load_h5ad('preprocessed')
 
-adata = cluster(adata, stage='preprocessed', color='clusters')
-adata = cluster(adata, stage='preprocessed', color='leiden', save_data=True)
+# adata = load_h5ad('preprocessed')
 
-acc1, acc2 = cluster_accuracy(adata)
-print(acc1)
-print(acc2)
+# adata = cluster(adata, stage='preprocessed', color='clusters')
+# adata = cluster(adata, stage='preprocessed', color='leiden', save_data=True)
+
+# acc1, acc2 = cluster_accuracy(adata)
+# print(acc1)
+# print(acc2)
 
 sc.tl.rank_genes_groups(adata, groupby='leiden', method='wilcoxon', corr_method='bonferroni')
 save_h5ad(adata, 'after_marker_genes')

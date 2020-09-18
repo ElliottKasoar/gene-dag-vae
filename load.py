@@ -25,7 +25,8 @@ except ImportError as error:
 
 # need to give full path now when this is imported into Jupyter notebook
 #base_dir = '.'
-base_dir = '/home/chiaretta/performance/programming/github/GeneVAE'
+# base_dir = '/home/chiaretta/performance/programming/github/GeneVAE'
+base_dir = '/Users/Elliott/Documents/GeneVAE'
 data_dir = base_dir + '/data'
 processed_dir = data_dir + '/processed'
 plots_dir = base_dir + '/plots'
