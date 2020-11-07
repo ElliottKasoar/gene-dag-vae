@@ -137,10 +137,10 @@ def sampling(args):
 # Build models
 # =============================================================================
 
-use_sf = True
-learn_sf = True
+use_sf = False
+learn_sf = False
 model = 'zinb'
-# model = 'nb'
+#model = 'nb'
 #model = 'gaussian'
 vae = True
 
@@ -204,6 +204,7 @@ if use_sf:
         if vae:
             sf_mean = Dense(1, name='sf_mean')(x)
             sf_log_var = Dense(1, name='sf_log_var')(x)
+            
             sf = Lambda(sampling, output_shape=(1,))([sf_mean, sf_log_var])
             sf_encoder = Model(count_input, [sf_mean, sf_log_var, sf], name='sf_encoder')
         else:
@@ -211,9 +212,10 @@ if use_sf:
             sf_encoder = Model(count_input, sf, name='sf_encoder')
 
     else:
-        sf = Input(shape=(1,), name='size_factor_input')
+        sf_input = Input(shape=(1,), name='size_factor_input')
+        #sf = Input(shape=(1,), name='size_factor_input')
 
-if use_sf:
+if use_sf and learn_sf:
     plot_model(sf_encoder, to_file=models_dir + '/' + model + '_sf_encoder.png',
            show_shapes=True, show_layer_names=True)         
 
@@ -250,7 +252,7 @@ if model == 'gaussian':
 
 elif model == 'nb' or model == 'zinb':
 
-    # Must ensures all values positive since loss takes logs etc.
+    # Must ensure all values positive since loss takes logs etc.
     MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
     DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
     sfAct = Lambda(lambda a: K.exp(a), name = 'expzsf')
@@ -263,13 +265,18 @@ elif model == 'nb' or model == 'zinb':
         if learn_sf:
             decoder_inputs = [lat_input, count_input]
         else:
-            decoder_inputs = [lat_input, sf]
+            decoder_inputs = [lat_input, sf_input]
+            #decoder_inputs = [lat_input, sf]
     else:
         decoder_inputs = lat_input
     
     # Decoder outputs
     if use_sf:
-        sf = sfAct(sf)
+        if learn_sf:
+            sf = sfAct(sf)
+        else:
+            sf = sfAct(sf_input)
+        #sf = sfAct(sf)
         mu_sf = multiply([mu, sf]) # Uses broadcasting
         decoder_outputs = [mu_sf, disp]
     else:
@@ -304,12 +311,15 @@ if use_sf:
    
     else:
         
-        AE_inputs = [count_input, sf]
+        AE_inputs = [count_input, sf_input]
+        #AE_inputs = [count_input, sf]
         
         if vae:
-            AE_outputs = decoder([encoder(count_input)[2], sf])
+            AE_outputs = decoder([encoder(count_input)[2], sf_input])
+            #AE_outputs = decoder([encoder(count_input)[2], sf])
         else:
-            AE_outputs = decoder([encoder(count_input), sf])
+            AE_outputs = decoder([encoder(count_input), sf_input])
+            #AE_outputs = decoder([encoder(count_input), sf])
         
 else:
     
@@ -382,7 +392,7 @@ def gaussian_kl(g1, g2):
     
     return K.sum(kl, axis=-1)
 
-
+'''
 def VAE_loss(outputs):
     
     def loss (y_true, y_pred):
@@ -425,6 +435,62 @@ def VAE_loss(outputs):
         return total_loss
     
     return loss
+'''
+
+# using add_loss method
+
+'''
+def VAE_loss(outputs):
+    def loss(y_true, y_pred):
+        return tf.keras.losses.mean_squared_error(y_true, outputs[0])
+    return loss
+
+VAE_loss = tf.keras.losses.mean_squared_error(AE_inputs, AE_outputs[0])
+autoencoder.add_loss(VAE_loss)
+'''
+
+def VAE_loss(y_true, outputs):
+    
+    eps = 1e-10 # Prevent NaN loss value
+    mu = outputs[0]
+    r = outputs[1]
+    if use_sf and not learn_sf:
+        y = y_true[0]
+    else:
+        y = y_true
+        
+    # Reconstruction loss for NB/ZINB distribution
+    if model=='nb':
+        to_sum = - NB_loglikelihood(mu, r, y, eps)
+    
+    elif model=='zinb':
+        pi = outputs[2]
+        to_sum = - ZINB_loglikelihood(mu, r, pi, y, eps)
+        
+    total_loss = K.sum(to_sum, axis=-1)
+    
+    # KL loss for gene expressions
+    if vae:
+        kl_loss = beta_vae * gaussian_kl_z(z_mean, z_log_var)
+        total_loss += kl_loss
+    
+        # KL loss for size factors
+        if use_sf and learn_sf:
+            log_counts = np.log(adata.obs['n_counts'])
+            
+            # ones_shape = batch_size
+            ones_shape = K.shape(outputs)[0]
+            
+            ones = tf.ones((ones_shape, 1))
+            
+            m = np.mean(log_counts) * ones
+            v = np.var(log_counts) * ones
+            
+            sf_kl_loss = beta_vae * gaussian_kl([sf_mean, sf_log_var], [m, v])
+            total_loss += sf_kl_loss
+    
+    return total_loss
+
 
 
 # Loss function run thrice (once for each output) but only one used
@@ -438,9 +504,16 @@ opt = Adam(lr=lr, beta_1=beta_1, beta_2=beta_2)
 if model == 'gaussian':
     autoencoder.compile(optimizer=opt, loss='mse')
 else:
+    # autoencoder.compile(optimizer=opt,
+    #                     loss=VAE_loss(AE_outputs),
+    #                     loss_weights=loss_weights)
+  #  autoencoder.add_loss(VAE_loss(AE_inputs,AE_outputs))
+    autoencoder.add_loss(VAE_loss(AE_inputs, AE_outputs))
+
     autoencoder.compile(optimizer=opt,
-                        loss=VAE_loss(AE_outputs),
+                        loss=None,
                         loss_weights=loss_weights)
+
 
 # from tb_callback import MyTensorBoard
 tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
