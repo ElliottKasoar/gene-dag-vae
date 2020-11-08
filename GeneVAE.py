@@ -139,9 +139,9 @@ def sampling(args):
 
 use_sf = False
 learn_sf = False
-model = 'zinb'
+#model = 'zinb'
 #model = 'nb'
-#model = 'gaussian'
+model = 'gaussian'     # likelihood of (input) data conditioned on Gaussian model => mse loss
 vae = True
 
 # =============================================================================
@@ -247,6 +247,18 @@ for i in range(1, gene_layers):
     x = LeakyReLU(gene_alpha)(x)
     x = Dropout(gene_dropout)(x)
 
+# Decoder inputs
+if use_sf:
+    if learn_sf:
+        decoder_inputs = [lat_input, count_input]
+    else:
+        decoder_inputs = [lat_input, sf_input]
+        #decoder_inputs = [lat_input, sf]
+else:
+    decoder_inputs = lat_input
+
+# Decoder outputs
+
 if model == 'gaussian': 
     decoder_outputs = Dense(input_dim, activation='sigmoid')(x)
 
@@ -255,29 +267,17 @@ elif model == 'nb' or model == 'zinb':
     # Must ensure all values positive since loss takes logs etc.
     MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
     DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
-    sfAct = Lambda(lambda a: K.exp(a), name = 'expzsf')
 
     mu = Dense(input_dim, activation = MeanAct, name='mu')(x)
     disp = Dense(input_dim, activation = DispAct, name='disp')(x)
 
-    # Decoder inputs
-    if use_sf:
-        if learn_sf:
-            decoder_inputs = [lat_input, count_input]
-        else:
-            decoder_inputs = [lat_input, sf_input]
-            #decoder_inputs = [lat_input, sf]
-    else:
-        decoder_inputs = lat_input
-    
     # Decoder outputs
     if use_sf:
-        if learn_sf:
-            sf = sfAct(sf)
-        else:
-            sf = sfAct(sf_input)
+        sfAct = Lambda(lambda a: K.exp(a), name = 'expzsf') 
+        sf = sfAct(sf) if learn_sf else sfAct(sf_input)
         #sf = sfAct(sf)
         mu_sf = multiply([mu, sf]) # Uses broadcasting
+        
         decoder_outputs = [mu_sf, disp]
     else:
         decoder_outputs = [mu, disp]
@@ -442,7 +442,7 @@ def VAE_loss(outputs):
 '''
 def VAE_loss(outputs):
     def loss(y_true, y_pred):
-        return tf.keras.losses.mean_squared_error(y_true, outputs[0])
+        return K.sum(y_true, axis=-1)
     return loss
 
 VAE_loss = tf.keras.losses.mean_squared_error(AE_inputs, AE_outputs[0])
@@ -454,6 +454,8 @@ def VAE_loss(y_true, outputs):
     eps = 1e-10 # Prevent NaN loss value
     mu = outputs[0]
     r = outputs[1]
+    #y = y_true[0] if use_sf and not learn_sf else y_true
+    
     if use_sf and not learn_sf:
         y = y_true[0]
     else:
@@ -468,18 +470,20 @@ def VAE_loss(y_true, outputs):
         to_sum = - ZINB_loglikelihood(mu, r, pi, y, eps)
         
     total_loss = K.sum(to_sum, axis=-1)
-    
+        
     # KL loss for gene expressions
     if vae:
         kl_loss = beta_vae * gaussian_kl_z(z_mean, z_log_var)
         total_loss += kl_loss
-    
+        
         # KL loss for size factors
         if use_sf and learn_sf:
+            # simply use all the data, rather than the data corresponding to the batch
             log_counts = np.log(adata.obs['n_counts'])
             
             # ones_shape = batch_size
-            ones_shape = K.shape(outputs)[0]
+            ones_shape = K.shape(outputs[0])[0]
+            #ones_shape = K.shape(sf_mean)[0]
             
             ones = tf.ones((ones_shape, 1))
             
@@ -488,9 +492,8 @@ def VAE_loss(y_true, outputs):
             
             sf_kl_loss = beta_vae * gaussian_kl([sf_mean, sf_log_var], [m, v])
             total_loss += sf_kl_loss
-    
+        
     return total_loss
-
 
 
 # Loss function run thrice (once for each output) but only one used
@@ -507,7 +510,7 @@ else:
     # autoencoder.compile(optimizer=opt,
     #                     loss=VAE_loss(AE_outputs),
     #                     loss_weights=loss_weights)
-  #  autoencoder.add_loss(VAE_loss(AE_inputs,AE_outputs))
+
     autoencoder.add_loss(VAE_loss(AE_inputs, AE_outputs))
 
     autoencoder.compile(optimizer=opt,
@@ -546,7 +549,7 @@ loss = autoencoder.fit(fit_x, fit_y, epochs=epochs, batch_size=batch_size,
 
 autoencoder.save('AE.h5')
 
-
+'''
 # =============================================================================
 # Plot loss
 # =============================================================================
@@ -602,3 +605,4 @@ def test_AE():
         decoded_data = decoder.predict(encoded_data)
     
     return decoded_data
+'''
