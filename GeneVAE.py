@@ -372,24 +372,31 @@ def ZINB_loglikelihood(mu, r, pi, y, eps=1e-10):
 
 
 # KL divergence between 2 Gaussians, one of which is N(0,1)
-def gaussian_kl_z(mean, log_var):
-    kl = - 0.5 * (1 + log_var - K.square(mean) - K.exp(log_var))
-    return K.sum(kl, axis=-1)
-
+# def gaussian_kl_z(mean, log_var):
+#     kl = - 0.5 * (1 + log_var - K.square(mean) - K.exp(log_var))
+#     return K.sum(kl, axis=-1)
 
 # https://github.com/tensorflow/probability/blob/master/tensorflow_probability/python/distributions/kullback_leibler.py
 # KL divergence between 2 Gaussians, g1 and g2
+# def gaussian_kl(g1, g2):
+    
+#     if tf2_flag:
+#         import tensorflow_probability as tfp
+#         ds = tfp.distributions
+#     else:
+#         ds = tf.contrib.distributions
+#     g1 = ds.Normal(loc=g1[0], scale=g1[1])
+#     g2 = ds.Normal(loc=g2[0], scale=g2[1])
+#     kl = ds.kl_divergence(g1, g2)
+    
+#     return K.sum(kl, axis=-1)
+
+# KL divergence between 2 Gaussians
+# g1[0] = mean, g1[1] = log_var
 def gaussian_kl(g1, g2):
-    
-    if tf2_flag:
-        import tensorflow_probability as tfp
-        ds = tfp.distributions
-    else:
-        ds = tf.contrib.distributions
-    g1 = ds.Normal(loc=g1[0], scale=g1[1])
-    g2 = ds.Normal(loc=g2[0], scale=g2[1])
-    kl = ds.kl_divergence(g1, g2)
-    
+    diff = K.square(g1[0]) - K.square(g2[0])
+    kl = - 0.5 * (1 - g2[1] + g1[1])
+    - 0.5 * K.exp(- g2[1]) * ( K.exp(g1[1]) + K.square(diff) )
     return K.sum(kl, axis=-1)
 
 '''
@@ -471,9 +478,11 @@ def VAE_loss(y_true, outputs):
         
     total_loss = K.sum(to_sum, axis=-1)
         
-    # KL loss for gene expressions
+    # KL loss for latent gene expressions
     if vae:
-        kl_loss = beta_vae * gaussian_kl_z(z_mean, z_log_var)
+        #kl_loss = beta_vae * gaussian_kl_z(z_mean, z_log_var)
+        zeros = tf.zeros(K.shape(z_mean))
+        kl_loss = beta_vae * gaussian_kl([z_mean, z_log_var], [zeros, zeros])
         total_loss += kl_loss
         
         # KL loss for size factors
@@ -549,7 +558,7 @@ loss = autoencoder.fit(fit_x, fit_y, epochs=epochs, batch_size=batch_size,
 
 autoencoder.save('AE.h5')
 
-'''
+
 # =============================================================================
 # Plot loss
 # =============================================================================
@@ -605,4 +614,3 @@ def test_AE():
         decoded_data = decoder.predict(encoded_data)
     
     return decoded_data
-'''
