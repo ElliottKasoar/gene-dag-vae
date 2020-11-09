@@ -370,14 +370,15 @@ def ZINB_loglikelihood(mu, r, pi, y, eps=1e-10):
     
     return zinb_log_likelihood
 
-
 # KL divergence between 2 Gaussians, one of which is N(0,1)
 # def gaussian_kl_z(mean, log_var):
 #     kl = - 0.5 * (1 + log_var - K.square(mean) - K.exp(log_var))
-#     return K.sum(kl, axis=-1)
+#     #return K.sum(kl, axis=-1)
+#     return kl
 
 # https://github.com/tensorflow/probability/blob/master/tensorflow_probability/python/distributions/kullback_leibler.py
 # KL divergence between 2 Gaussians, g1 and g2
+# note: g1[1] (and g2[1]) are the stdev, not log variance
 # def gaussian_kl(g1, g2):
     
 #     if tf2_flag:
@@ -389,15 +390,24 @@ def ZINB_loglikelihood(mu, r, pi, y, eps=1e-10):
 #     g2 = ds.Normal(loc=g2[0], scale=g2[1])
 #     kl = ds.kl_divergence(g1, g2)
     
-#     return K.sum(kl, axis=-1)
+#     #return K.sum(kl, axis=-1)
+#     return kl
 
 # KL divergence between 2 Gaussians
 # g1[0] = mean, g1[1] = log_var
 def gaussian_kl(g1, g2):
-    diff = K.square(g1[0]) - K.square(g2[0])
-    kl = - 0.5 * (1 - g2[1] + g1[1])
-    - 0.5 * K.exp(- g2[1]) * ( K.exp(g1[1]) + K.square(diff) )
-    return K.sum(kl, axis=-1)
+    kl = - 0.5 * (1 - g2[1] + g1[1]) + 0.5 * K.exp(- g2[1]) * ( K.exp(g1[1]) + K.square(g1[0] - g2[0]) )
+    #return K.sum(kl, axis=-1)
+    return kl
+
+# ones = np.ones((10,))
+# zeros = np.zeros((10,))
+# a = np.array([0,1,2,3,4,5,6,7,8,9], dtype='float64')
+# print ('Here')
+# K.print_tensor(gaussian_kl_z(a,zeros))
+
+# K.print_tensor(gaussian_kl_1([a,ones],[zeros, np.sqrt(np.exp(a))]))
+# K.print_tensor(gaussian_kl([a,zeros],[zeros,a]))
 
 '''
 def VAE_loss(outputs):
