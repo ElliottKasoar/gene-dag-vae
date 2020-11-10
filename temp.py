@@ -8,7 +8,7 @@ import scanpy as sc
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-
+from os import path
 
 def display (obj, adata):
     [print (f"{item} has type:\t{type(obj[item])}") for item in obj]
@@ -53,9 +53,7 @@ def examine_adata (adata):      # print out aggregates
     #print (f'describe the genes:\n{adata.to_df().describe().iloc[:5]}')
 
 # code to create the directory 'plots' if it doesnt exist
-#base_dir = '.'
-# base_dir = '/home/chiaretta/performance/programming/github/GeneVAE'
-base_dir = '/Users/Elliott/Documents/GeneVAE'
+base_dir = path.dirname(path.realpath(__file__))
 data_dir = base_dir + '/data'
 processed_dir = data_dir + '/processed'
 plots_dir = base_dir + '/plots'

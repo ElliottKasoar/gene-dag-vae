@@ -24,9 +24,7 @@ except ImportError as error:
     sys.exit(1)
 
 # need to give full path now when this is imported into Jupyter notebook
-#base_dir = '.'
-# base_dir = '/home/chiaretta/performance/programming/github/GeneVAE'
-base_dir = '/Users/Elliott/Documents/GeneVAE'
+base_dir = path.dirname(path.realpath(__file__))
 data_dir = base_dir + '/data'
 processed_dir = data_dir + '/processed'
 plots_dir = base_dir + '/plots'
