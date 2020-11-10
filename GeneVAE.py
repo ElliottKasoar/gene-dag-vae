@@ -137,12 +137,12 @@ def sampling(args):
 # Build models
 # =============================================================================
 
-use_sf = False
+use_sf = True
 learn_sf = False
 #model = 'zinb'
 #model = 'nb'
 model = 'gaussian'     # likelihood of (input) data conditioned on Gaussian model => mse loss
-vae = True
+vae = False
 
 # =============================================================================
 # Encoder Model: count data
@@ -397,8 +397,8 @@ def ZINB_loglikelihood(mu, r, pi, y, eps=1e-10):
 # g1[0] = mean, g1[1] = log_var
 def gaussian_kl(g1, g2):
     kl = - 0.5 * (1 - g2[1] + g1[1]) + 0.5 * K.exp(- g2[1]) * ( K.exp(g1[1]) + K.square(g1[0] - g2[0]) )
-    #return K.sum(kl, axis=-1)
-    return kl
+    return K.sum(kl, axis=-1)
+    # return kl
 
 # ones = np.ones((10,))
 # zeros = np.zeros((10,))
@@ -546,7 +546,7 @@ tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
 
 if use_sf and not learn_sf:
     fit_x = [X_train, sf_train]
-    val_x = [X_test, X_test]
+    val_x = [X_test, sf_test]
 else:
     fit_x = X_train
     val_x = X_test
