@@ -15,7 +15,7 @@ import tensorflow as tf
 import keras.backend as K
 
 from keras.utils import plot_model
-from keras.layers import Input, Dense, BatchNormalization, Dropout
+from keras.layers import Layer, Input, Dense, BatchNormalization, Dropout
 from keras.models import Model
 from keras import regularizers
 from keras.layers.advanced_activations import LeakyReLU
@@ -27,6 +27,8 @@ import scanpy as sc
 # (Almost reproducible)
 # np.random.seed(1337)
 # tf.random.set_seed(1234)
+
+# tf.compat.v1.disable_eager_execution
 
 debug = False
 
@@ -145,199 +147,46 @@ model = 'zinb'
 vae = True
 
 # =============================================================================
-# Encoder Model: count data
+# Custom Layers
 # =============================================================================
 
-count_input = Input(shape=input_shape, name='count_input')
-x = Dense(gene_nodes)(count_input)
-x = BatchNormalization(momentum=gene_momentum)(x)
-x = LeakyReLU(gene_alpha)(x)
-x = Dropout(gene_dropout)(x)
-
-for i in range(1, gene_layers):
+# calculate likelihood of the (input) data conditioned on a model and its params (likelihood_params)    
+class NegativeLogLikelihoodLayer(Layer):
     
-    if gene_flat:
-        nodes = gene_nodes
-    else:
-        nodes = gene_nodes // (2**i)
-        if nodes < latent_dim:
-            print("Warning: layer has fewer nodes than latent layer")
-            print(f'Layer nodes: {nodes}. Latent nodes: {latent_dim}')
+    '''Identity transform layer that adds
+    negative log likelihood (reconstruction loss)
+    to the objective'''
     
-    x = Dense(nodes)(x)
-    x = BatchNormalization(momentum=gene_momentum)(x)
-    x = LeakyReLU(gene_alpha)(x)
-    x = Dropout(gene_dropout)(x)
-
-if vae:
-    z_mean = Dense(latent_dim, name='latent_mean')(x)
-    z_log_var = Dense(latent_dim, name='latent_log_var')(x)
-    z = Lambda(sampling, output_shape=(latent_dim,))([z_mean, z_log_var])
-    encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
-
-else:
-    z = Dense(latent_dim, activation='relu', name='latent')(x)
-    encoder = Model(count_input, z, name='encoder')
-
-plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
-           show_shapes=True, show_layer_names=True)
-
-# =============================================================================
-# Size factors
-# =============================================================================
-
-if use_sf:
-    if learn_sf:
+    def __init__(self, ll_func, eps=1e-10):
+        #self.is_placeholder = True
+        self.ll = ll_func
+        self.eps = eps # Prevent NaN loss values
+        super(NegativeLogLikelihoodLayer, self).__init__()
         
-        x = Dense(sf_nodes)(count_input)
-        x = BatchNormalization(momentum=sf_momentum)(x)
-        x = LeakyReLU(sf_alpha)(x)
-        x = Dropout(sf_dropout)(x)
-        
-        for i in range(1, sf_layers):
-            nodes = sf_nodes // (2**i)
-            x = Dense(nodes)(x)
-            x = BatchNormalization(momentum=sf_momentum)(x)
-            x = LeakyReLU(sf_alpha)(x)
-            x = Dropout(sf_dropout)(x)
-        
-        if vae:
-            sf_mean = Dense(1, name='sf_mean')(x)
-            sf_log_var = Dense(1, name='sf_log_var')(x)
-            
-            sf = Lambda(sampling, output_shape=(1,))([sf_mean, sf_log_var])
-            sf_encoder = Model(count_input, [sf_mean, sf_log_var, sf], name='sf_encoder')
-        else:
-            sf = Dense(1, name='sf_latent')(x)
-            sf_encoder = Model(count_input, sf, name='sf_encoder')
+    def call(self, y, inputs):
+        likelihood_params = inputs
+        loss = - K.sum(self.ll(y, likelihood_params, self.eps), axis=-1)
+        self.add_loss(loss)
+        return inputs
 
-    else:
-        sf_input = Input(shape=(1,), name='size_factor_input')
-        #sf = Input(shape=(1,), name='size_factor_input')
+class KLDivergenceLayer(Layer):
 
-if use_sf and learn_sf:
-    plot_model(sf_encoder, to_file=models_dir + '/' + model + '_sf_encoder.png',
-           show_shapes=True, show_layer_names=True)         
-
-# =============================================================================
-# Decoder Model 
-# =============================================================================
-
-# Lossy reconstruction of the input
-lat_input = Input(shape=(latent_dim,))
-
-if gene_flat:
-    x = Dense(gene_nodes)(lat_input)
-else:
-    nodes = gene_nodes // (2 ** (gene_layers - 1))
-    x = Dense(nodes)(lat_input)
-
-x = BatchNormalization(momentum=gene_momentum)(x)
-x = LeakyReLU(gene_alpha)(x)
-x = Dropout(gene_dropout)(x)
-
-for i in range(1, gene_layers):
-    if gene_flat:
-        nodes = gene_nodes
-    else:
-        nodes = gene_nodes // (2 ** (gene_layers - (i+1)))
-
-    x = Dense(nodes)(x)
-    x = BatchNormalization(momentum=gene_momentum)(x)
-    x = LeakyReLU(gene_alpha)(x)
-    x = Dropout(gene_dropout)(x)
-
-# Decoder inputs
-if use_sf:
-    if learn_sf:
-        decoder_inputs = [lat_input, count_input]
-    else:
-        decoder_inputs = [lat_input, sf_input]
-        #decoder_inputs = [lat_input, sf]
-else:
-    decoder_inputs = lat_input
-
-# Decoder outputs
-
-if model == 'gaussian': 
-    decoder_outputs = Dense(input_dim, activation='sigmoid')(x)
-
-elif model == 'nb' or model == 'zinb':
-
-    # Must ensure all values positive since loss takes logs etc.
-    MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
-    DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
-
-    mu = Dense(input_dim, activation = MeanAct, name='mu')(x)
-    disp = Dense(input_dim, activation = DispAct, name='disp')(x)
-
-    # Decoder outputs
-    if use_sf:
-        sfAct = Lambda(lambda a: K.exp(a), name = 'expzsf') 
-        sf = sfAct(sf) if learn_sf else sfAct(sf_input)
-        #sf = sfAct(sf)
-        mu_sf = multiply([mu, sf]) # Uses broadcasting
-        
-        decoder_outputs = [mu_sf, disp]
-    else:
-        decoder_outputs = [mu, disp]
+    '''Identity transform layer that adds 
+    KL divergence to the objective'''
     
-    if model == 'zinb':
-        # Activation is sigmoid because values restricted to [0,1]
-        pi = Dense(input_dim, activation = 'sigmoid', name='pi')(x)
-        decoder_outputs.append(pi)    
-
-
-decoder = Model(decoder_inputs, decoder_outputs, name='decoder')
-
-plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
-           show_shapes=True, show_layer_names=True)         
-
-
-# =============================================================================
-# Autoencoder Model
-# =============================================================================
-# Connect encoder and decoder models 
-if use_sf:
+    def __init__(self, kld_func, beta_vae):
+        #self.is_placeholder = True
+        self.kld = kld_func
+        self.beta = beta_vae
+        super(KLDivergenceLayer, self).__init__()
+        
+    def call(self, input, reference):
+        loss = self.beta * K.sum(self.kld(input, reference), axis=-1)
+        self.add_loss(loss)
+        return input
     
-    if learn_sf:    
-        
-        AE_inputs = count_input
-        
-        if vae:
-            AE_outputs = decoder([encoder(count_input)[2], count_input])
-        else:
-            AE_outputs = decoder([encoder(count_input), count_input])
-   
-    else:
-        
-        AE_inputs = [count_input, sf_input]
-        #AE_inputs = [count_input, sf]
-        
-        if vae:
-            AE_outputs = decoder([encoder(count_input)[2], sf_input])
-            #AE_outputs = decoder([encoder(count_input)[2], sf])
-        else:
-            AE_outputs = decoder([encoder(count_input), sf_input])
-            #AE_outputs = decoder([encoder(count_input), sf])
-        
-else:
-    
-    AE_inputs = count_input
-    
-    if vae:
-        AE_outputs = decoder(encoder(count_input)[2])
-    else:
-        AE_outputs = decoder(encoder(count_input))
-
-autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
-
-print (autoencoder.summary())
-plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
-           show_shapes=True, show_layer_names=True)         
-
 # =============================================================================
-# Define custom loss
+# Custom losses
 # =============================================================================
 
 def NB_loglikelihood(y, params, eps=1e-10):
@@ -377,13 +226,6 @@ def ZINB_loglikelihood(y, params, eps=1e-10):
     
     return zinb_log_likelihood
 
-
-# KL divergence between 2 Gaussians, one of which is N(0,1)
-# def gaussian_kl_z(mean, log_var):
-#     kl = - 0.5 * (1 + log_var - K.square(mean) - K.exp(log_var))
-#     #return K.sum(kl, axis=-1)
-#     return kl
-
 # https://github.com/tensorflow/probability/blob/master/tensorflow_probability/python/distributions/kullback_leibler.py
 # KL divergence between 2 Gaussians, g1 and g2
 # note: g1[1] (and g2[1]) are the stdev, not log variance
@@ -402,84 +244,274 @@ def ZINB_loglikelihood(y, params, eps=1e-10):
 #     return kl
 
 # KL divergence between 2 Gaussians
-# g1[0] = mean, g1[1] = log_var
 def gaussian_kl(g1, g2):
     mu_1, logvar_1 = g1
     mu_2, logvar_2 = g2
-    # kl = - 0.5 * (1 - g2[1] + g1[1]) + 0.5 * K.exp(- g2[1]) * ( K.exp(g1[1]) + K.square(g1[0] - g2[0]) )
+    
     kl = - 0.5 * (1 - logvar_2 + logvar_1) + 0.5 * K.exp(- logvar_2) * ( K.exp(logvar_1) + K.square(mu_1 - mu_2) )
-    # return K.sum(kl, axis=-1)
     return kl
 
-# checking the kl-div functions agree:
-# ones = np.ones((10,))
-# zeros = np.zeros((10,))
-# a = np.array([0,1,2,3,4,5,6,7,8,9], dtype='float64')
-# print ('Here')
-# K.print_tensor(gaussian_kl_z(a,zeros))
-
-# K.print_tensor(gaussian_kl_1([a,ones],[zeros, np.sqrt(np.exp(a))]))
-# K.print_tensor(gaussian_kl([a,zeros],[zeros,a]))
-
-
-# using add_loss method:
-'''
-def VAE_loss(outputs):
-    def loss(y_true, y_pred):
-        return K.sum(y_true, axis=-1)
-    return loss
-
-VAE_loss = tf.keras.losses.mean_squared_error(AE_inputs, AE_outputs[0])
-autoencoder.add_loss(VAE_loss)
-'''
-
-def VAE_loss(y_true, outputs):
+# def VAE_loss(y_true, outputs):
     
-    eps = 1e-10 # Prevent NaN loss value
-    # mu = outputs[0]
-    # r = outputs[1]
-    # y = y_true[0] if use_sf and not learn_sf else y_true
+#     eps = 1e-10 # Prevent NaN loss value
+#     # mu = outputs[0]
+#     # r = outputs[1]
+#     # y = y_true[0] if use_sf and not learn_sf else y_true
     
-    if use_sf and not learn_sf:
-        y = y_true[0]
+#     if use_sf and not learn_sf:
+#         y = y_true[0]
+#     else:
+#         y = y_true
+        
+#     # Reconstruction loss for NB/ZINB distribution
+#     if model=='nb':
+#         to_sum = - NB_loglikelihood(y, outputs, eps)
+    
+#     elif model=='zinb':
+#         # pi = outputs[2]
+#         to_sum = - ZINB_loglikelihood(y, outputs, eps)
+        
+#     total_loss = K.sum(to_sum, axis=-1)
+        
+#     # KL loss for latent gene expressions
+#     if vae:
+#         #kl_loss = beta_vae * gaussian_kl_z(z_mean, z_log_var)
+#         zeros = tf.zeros(K.shape(z_mean))
+#         kl_loss = beta_vae * K.sum(gaussian_kl([z_mean, z_log_var], [zeros, zeros]), axis=-1)
+#         total_loss += kl_loss
+        
+#         # KL loss for size factors
+#         if use_sf and learn_sf:
+#             # simply use all the data, rather than the data corresponding to the batch
+#             log_counts = np.log(adata.obs['n_counts'])
+            
+#             # ones_shape = batch_size
+#             # ones_shape = K.shape(outputs[0])[0]
+#             ones_shape = K.shape(sf_mean)[0]
+#             ones = tf.ones((ones_shape, 1))
+            
+#             m = np.mean(log_counts) * ones
+#             v = np.var(log_counts) * ones
+            
+#             sf_kl_loss = beta_vae * K.sum(gaussian_kl([sf_mean, sf_log_var], [m, v]), axis=-1)
+#             total_loss += sf_kl_loss
+        
+#     return total_loss
+    
+# =============================================================================
+# Encoder Model: count data
+# =============================================================================
+
+count_input = Input(shape=input_shape, name='count_input')
+x = Dense(gene_nodes)(count_input)
+x = BatchNormalization(momentum=gene_momentum)(x)
+x = LeakyReLU(gene_alpha)(x)
+x = Dropout(gene_dropout)(x)
+
+for i in range(1, gene_layers):
+    
+    if gene_flat:
+        nodes = gene_nodes
     else:
-        y = y_true
-        
-    # Reconstruction loss for NB/ZINB distribution
-    if model=='nb':
-        to_sum = - NB_loglikelihood(y, outputs, eps)
+        nodes = gene_nodes // (2**i)
+        if nodes < latent_dim:
+            print("Warning: layer has fewer nodes than latent layer")
+            print(f'Layer nodes: {nodes}. Latent nodes: {latent_dim}')
     
-    elif model=='zinb':
-        # pi = outputs[2]
-        to_sum = - ZINB_loglikelihood(y, outputs, eps)
+    x = Dense(nodes)(x)
+    x = BatchNormalization(momentum=gene_momentum)(x)
+    x = LeakyReLU(gene_alpha)(x)
+    x = Dropout(gene_dropout)(x)
+
+if vae:
+    z_mean = Dense(latent_dim, name='latent_mean')(x)
+    z_log_var = Dense(latent_dim, name='latent_log_var')(x)
+    
+    zeros = tf.zeros(K.shape(z_mean))
+    z_mean, z_log_var = KLDivergenceLayer(gaussian_kl, beta_vae)([z_mean, z_log_var], [zeros, zeros])
+    
+    z = Lambda(sampling, output_shape=(latent_dim,))([z_mean, z_log_var])
+    encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
+
+else:
+    z = Dense(latent_dim, activation='relu', name='latent')(x)
+    encoder = Model(count_input, z, name='encoder')
+
+plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
+           show_shapes=True, show_layer_names=True)
+
+# =============================================================================
+# Size factors
+# =============================================================================
+
+if use_sf:
+    if learn_sf:
         
-    total_loss = K.sum(to_sum, axis=-1)
+        x = Dense(sf_nodes)(count_input)
+        x = BatchNormalization(momentum=sf_momentum)(x)
+        x = LeakyReLU(sf_alpha)(x)
+        x = Dropout(sf_dropout)(x)
         
-    # KL loss for latent gene expressions
-    if vae:
-        #kl_loss = beta_vae * gaussian_kl_z(z_mean, z_log_var)
-        zeros = tf.zeros(K.shape(z_mean))
-        kl_loss = beta_vae * K.sum(gaussian_kl([z_mean, z_log_var], [zeros, zeros]), axis=-1)
-        total_loss += kl_loss
+        for i in range(1, sf_layers):
+            nodes = sf_nodes // (2**i)
+            x = Dense(nodes)(x)
+            x = BatchNormalization(momentum=sf_momentum)(x)
+            x = LeakyReLU(sf_alpha)(x)
+            x = Dropout(sf_dropout)(x)
         
-        # KL loss for size factors
-        if use_sf and learn_sf:
+        if vae:
+            sf_mean = Dense(1, name='sf_mean')(x)
+            sf_log_var = Dense(1, name='sf_log_var')(x)
+            
+
             # simply use all the data, rather than the data corresponding to the batch
             log_counts = np.log(adata.obs['n_counts'])
-            
+
             # ones_shape = batch_size
-            # ones_shape = K.shape(outputs[0])[0]
             ones_shape = K.shape(sf_mean)[0]
             ones = tf.ones((ones_shape, 1))
             
             m = np.mean(log_counts) * ones
             v = np.var(log_counts) * ones
             
-            sf_kl_loss = beta_vae * K.sum(gaussian_kl([sf_mean, sf_log_var], [m, v]), axis=-1)
-            total_loss += sf_kl_loss
-        
-    return total_loss
+            sf_mean, sf_log_var = KLDivergenceLayer(gaussian_kl, beta_vae)([sf_mean, sf_log_var], [m, v])
+            
+            
+            sf = Lambda(sampling, output_shape=(1,))([sf_mean, sf_log_var])
+            sf_encoder = Model(count_input, [sf_mean, sf_log_var, sf], name='sf_encoder')
 
+        else:
+            sf = Dense(1, name='sf_latent')(x)
+            sf_encoder = Model(count_input, sf, name='sf_encoder')
+
+    else:
+        sf_input = Input(shape=(1,), name='size_factor_input')
+
+if use_sf and learn_sf:
+    plot_model(sf_encoder, to_file=models_dir + '/' + model + '_sf_encoder.png',
+           show_shapes=True, show_layer_names=True)
+
+# =============================================================================
+# Decoder Model 
+# =============================================================================
+
+# Lossy reconstruction of the input
+lat_input = Input(shape=(latent_dim,))
+
+if gene_flat:
+    x = Dense(gene_nodes)(lat_input)
+else:
+    nodes = gene_nodes // (2 ** (gene_layers - 1))
+    x = Dense(nodes)(lat_input)
+
+x = BatchNormalization(momentum=gene_momentum)(x)
+x = LeakyReLU(gene_alpha)(x)
+x = Dropout(gene_dropout)(x)
+
+for i in range(1, gene_layers):
+    if gene_flat:
+        nodes = gene_nodes
+    else:
+        nodes = gene_nodes // (2 ** (gene_layers - (i+1)))
+
+    x = Dense(nodes)(x)
+    x = BatchNormalization(momentum=gene_momentum)(x)
+    x = LeakyReLU(gene_alpha)(x)
+    x = Dropout(gene_dropout)(x)
+
+# Decoder inputs
+if use_sf:
+    if learn_sf:
+        decoder_inputs = [lat_input, count_input]
+    else:
+        decoder_inputs = [lat_input, sf_input]
+else:
+    decoder_inputs = lat_input
+
+# Decoder outputs
+
+if model == 'gaussian': 
+    decoder_outputs = Dense(input_dim, activation='sigmoid')(x)
+
+elif model == 'nb' or model == 'zinb':
+
+    # Must ensure all values positive since loss takes logs etc.
+    MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
+    DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
+
+    mu = Dense(input_dim, activation = MeanAct, name='mu')(x)
+    disp = Dense(input_dim, activation = DispAct, name='disp')(x)
+
+    # Decoder outputs
+    if use_sf:
+        sfAct = Lambda(lambda a: K.exp(a), name = 'expzsf') 
+        sf = sfAct(sf) if learn_sf else sfAct(sf_input)
+        mu_sf = multiply([mu, sf]) # Uses broadcasting
+        
+        decoder_outputs = [mu_sf, disp]
+    else:
+        decoder_outputs = [mu, disp]
+    
+    if model == 'zinb':
+        # Activation is sigmoid because values restricted to [0,1]
+        pi = Dense(input_dim, activation = 'sigmoid', name='pi')(x)
+        decoder_outputs.append(pi)    
+
+
+decoder = Model(decoder_inputs, decoder_outputs, name='decoder')
+
+plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
+           show_shapes=True, show_layer_names=True)         
+
+
+# =============================================================================
+# Autoencoder Model
+# =============================================================================
+# Connect encoder and decoder models 
+if use_sf:
+    
+    if learn_sf:    
+        
+        AE_inputs = count_input
+        y = AE_inputs
+        
+        if vae:
+            AE_outputs = decoder([encoder(count_input)[2], count_input])
+        else:
+            AE_outputs = decoder([encoder(count_input), count_input])
+   
+    else:
+        
+        AE_inputs = [count_input, sf_input]
+        y = AE_inputs[0]
+        
+        if vae:
+            AE_outputs = decoder([encoder(count_input)[2], sf_input])
+        else:
+            AE_outputs = decoder([encoder(count_input), sf_input])
+        
+else:
+    
+    AE_inputs = count_input
+    y = AE_inputs
+    
+    if vae:
+        AE_outputs = decoder(encoder(count_input)[2])
+    else:
+        AE_outputs = decoder(encoder(count_input))
+        
+if model == 'nb':
+    AE_outputs = NegativeLogLikelihoodLayer(NB_loglikelihood)(y, AE_outputs)
+elif model == 'zinb':
+    AE_outputs = NegativeLogLikelihoodLayer(ZINB_loglikelihood)(y, AE_outputs)
+
+autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
+
+print (autoencoder.losses)
+plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
+           show_shapes=True, show_layer_names=True)         
+
+# =============================================================================
 
 # Loss function run thrice (once for each output) but only one used
 if model == 'zinb':
@@ -492,7 +524,7 @@ opt = Adam(lr=lr, beta_1=beta_1, beta_2=beta_2)
 if model == 'gaussian':
     autoencoder.compile(optimizer=opt, loss='mse')
 else:
-    autoencoder.add_loss(VAE_loss(AE_inputs, AE_outputs))
+    #autoencoder.add_loss(VAE_loss(AE_inputs, AE_outputs))
 
     autoencoder.compile(optimizer=opt,
                         loss=None,
