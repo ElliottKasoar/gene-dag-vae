@@ -44,7 +44,7 @@ if debug:
 from time import time
 from keras.callbacks import TensorBoard
 
-if int(tf.__version__[0]) == 2:
+if int(tf.__version__.startswith("2.")):
     tf2_flag = True
 else:
     tf2_flag = False
@@ -70,25 +70,35 @@ train_size = 0.9 # Fraction of data used in training
 epochs = 200
 batch_size = 512
 
-beta_vae = 2
+beta_vae = 1 # Change constraint on latent capactity
 
+# Encoder (and symmetric decoder) model structure
 gene_layers = 3 # Hidden layers between input and latent layers
 gene_nodes = 512 # Size of initial hidden layer
 gene_flat = False # Keep all hidden layers flat (else halve each layer)
 gene_alpha = 0.2 # LeakyReLU alpha
-gene_momentum=0.8 # BatchNorm momentum
+gene_momentum = 0.8 # BatchNorm momentum
 gene_dropout = 0.2 # Dropout rate
 
+# Size factor model structure 
 sf_layers = 4 # Hidden layers between input and latent layers
 sf_nodes = 1024 # Size of initial hidden layer (half each layer)
 sf_alpha = 0.2 # LeakyReLU alpha
-momentum=sf_momentum=0.8 # BatchNorm momentum
+momentum=sf_momentum = 0.8 # BatchNorm momentum
 sf_dropout = 0.2 # Dropout rate
 
 # Adam optimiser parameters
-lr = 0.0005 #Default = 0.001 (Adam default = 0.001)
+lr = 0.0005 # Learning rate. Default = 0.001 (Adam default = 0.001)
 beta_1=0.75 # Default = 0.9 (Adam default = 0.9)
 beta_2=0.99 # Default = 0.999 (Adam default = 0.999)
+
+# Model strucure options:
+use_sf = True # Use size factor in network
+learn_sf = True # Learn size factor using (V)AE network, else input values
+model = 'zinb' # Use zero-inflated negative binomial dist
+#model = 'nb' # negative binomial dist
+#model = 'gaussian' # likelihood of (input) data conditioned on Gaussian model => mse loss
+vae = True # Make autoencoder variational
 
 # =============================================================================
 # Load data
@@ -135,16 +145,6 @@ def sampling(args):
                               mean=epsilon_mean, stddev=epsilon_std)
     return mean + K.exp(0.5 * log_var) * epsilon
 
-# =============================================================================
-# Build models
-# =============================================================================
-
-use_sf = True
-learn_sf = True
-model = 'zinb'
-#model = 'nb'
-#model = 'gaussian'     # likelihood of (input) data conditioned on Gaussian model => mse loss
-vae = True
 
 # =============================================================================
 # Custom Layers
@@ -617,3 +617,4 @@ def test_AE():
         decoded_data = decoder.predict(encoded_data)
     
     return decoded_data
+
