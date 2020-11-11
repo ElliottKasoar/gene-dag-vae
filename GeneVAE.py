@@ -125,8 +125,8 @@ sf_train, sf_test = train_test_split(adata.obs['sf'].values,
 # reparametrisation trick
 def sampling(args):
     mean, log_var = args
-    epsilon_std = 1.0
-    epsilon_mean = 0.0
+    epsilon_mean, epsilon_std = [0.0, 1.0]
+
     batch = K.shape(mean)[0]
     dim = K.int_shape(mean)[1]
     epsilon = K.random_normal(shape=(batch, dim),
@@ -138,11 +138,11 @@ def sampling(args):
 # =============================================================================
 
 use_sf = True
-learn_sf = False
-#model = 'zinb'
+learn_sf = True
+model = 'zinb'
 #model = 'nb'
-model = 'gaussian'     # likelihood of (input) data conditioned on Gaussian model => mse loss
-vae = False
+#model = 'gaussian'     # likelihood of (input) data conditioned on Gaussian model => mse loss
+vae = True
 
 # =============================================================================
 # Encoder Model: count data
@@ -176,8 +176,8 @@ if vae:
     encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
 
 else:
-    latent = Dense(latent_dim, activation='relu', name='latent')(x)
-    encoder = Model(count_input, latent, name='encoder')
+    z = Dense(latent_dim, activation='relu', name='latent')(x)
+    encoder = Model(count_input, z, name='encoder')
 
 plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
            show_shapes=True, show_layer_names=True)
@@ -340,7 +340,10 @@ plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
 # Define custom loss
 # =============================================================================
 
-def NB_loglikelihood(mu, r, y, eps=1e-10):
+def NB_loglikelihood(y, params, eps=1e-10):
+    
+    mu = params[0]
+    r = params[1]
     
     if tf2_flag:
         l1 = tf.math.lgamma(y+r+eps) - tf.math.lgamma(r+eps) - tf.math.lgamma(y+1.0)
@@ -354,9 +357,13 @@ def NB_loglikelihood(mu, r, y, eps=1e-10):
     return log_likelihood
 
 
-def ZINB_loglikelihood(mu, r, pi, y, eps=1e-10):
+def ZINB_loglikelihood(y, params, eps=1e-10):
     
-    nb_log_likelihood = NB_loglikelihood(mu, r, y, eps)
+    mu = params[0]
+    r = params[1]
+    pi = params[2]
+    
+    nb_log_likelihood = NB_loglikelihood(y, params[:-1], eps)
     
     if tf2_flag:
         case_zero = tf.math.log(eps + pi + (1.0 - pi) * tf.math.pow((r/(r+mu+eps)), r))
@@ -369,6 +376,7 @@ def ZINB_loglikelihood(mu, r, pi, y, eps=1e-10):
     zinb_log_likelihood = tf.where(tf.less(y, 1e-8), case_zero, case_nonzero)
     
     return zinb_log_likelihood
+
 
 # KL divergence between 2 Gaussians, one of which is N(0,1)
 # def gaussian_kl_z(mean, log_var):
@@ -396,10 +404,14 @@ def ZINB_loglikelihood(mu, r, pi, y, eps=1e-10):
 # KL divergence between 2 Gaussians
 # g1[0] = mean, g1[1] = log_var
 def gaussian_kl(g1, g2):
-    kl = - 0.5 * (1 - g2[1] + g1[1]) + 0.5 * K.exp(- g2[1]) * ( K.exp(g1[1]) + K.square(g1[0] - g2[0]) )
-    return K.sum(kl, axis=-1)
-    # return kl
+    mu_1, logvar_1 = g1
+    mu_2, logvar_2 = g2
+    # kl = - 0.5 * (1 - g2[1] + g1[1]) + 0.5 * K.exp(- g2[1]) * ( K.exp(g1[1]) + K.square(g1[0] - g2[0]) )
+    kl = - 0.5 * (1 - logvar_2 + logvar_1) + 0.5 * K.exp(- logvar_2) * ( K.exp(logvar_1) + K.square(mu_1 - mu_2) )
+    # return K.sum(kl, axis=-1)
+    return kl
 
+# checking the kl-div functions agree:
 # ones = np.ones((10,))
 # zeros = np.zeros((10,))
 # a = np.array([0,1,2,3,4,5,6,7,8,9], dtype='float64')
@@ -409,53 +421,8 @@ def gaussian_kl(g1, g2):
 # K.print_tensor(gaussian_kl_1([a,ones],[zeros, np.sqrt(np.exp(a))]))
 # K.print_tensor(gaussian_kl([a,zeros],[zeros,a]))
 
-'''
-def VAE_loss(outputs):
-    
-    def loss (y_true, y_pred):
-        
-        eps = 1e-10 # Prevent NaN loss value
-        mu = outputs[0]
-        r = outputs[1]
-        y = y_true
-        
-        # Reconstruction loss for NB/ZINB distribution
-        if model=='nb':
-            to_sum = - NB_loglikelihood(mu, r, y, eps)
-        
-        elif model=='zinb':
-            pi = outputs[2]
-            to_sum = - ZINB_loglikelihood(mu, r, pi, y, eps)
-        
-        total_loss = K.sum(to_sum, axis=-1)
-        
-        # KL loss for gene expressions
-        if vae:
-            kl_loss = beta_vae * gaussian_kl_z(z_mean, z_log_var)
-            total_loss += kl_loss
-        
-        # KL loss for size factors
-        if use_sf and learn_sf:
-            log_counts = np.log(adata.obs['n_counts'])
-            
-            # ones_shape = batch_size
-            ones_shape = K.shape(y_pred)[0]
-            
-            ones = tf.ones((ones_shape, 1))
-            
-            m = np.mean(log_counts) * ones
-            v = np.var(log_counts) * ones
-            
-            sf_kl_loss = beta_vae * gaussian_kl([sf_mean, sf_log_var], [m, v])
-            total_loss += sf_kl_loss
-        
-        return total_loss
-    
-    return loss
-'''
 
-# using add_loss method
-
+# using add_loss method:
 '''
 def VAE_loss(outputs):
     def loss(y_true, y_pred):
@@ -469,9 +436,9 @@ autoencoder.add_loss(VAE_loss)
 def VAE_loss(y_true, outputs):
     
     eps = 1e-10 # Prevent NaN loss value
-    mu = outputs[0]
-    r = outputs[1]
-    #y = y_true[0] if use_sf and not learn_sf else y_true
+    # mu = outputs[0]
+    # r = outputs[1]
+    # y = y_true[0] if use_sf and not learn_sf else y_true
     
     if use_sf and not learn_sf:
         y = y_true[0]
@@ -480,11 +447,11 @@ def VAE_loss(y_true, outputs):
         
     # Reconstruction loss for NB/ZINB distribution
     if model=='nb':
-        to_sum = - NB_loglikelihood(mu, r, y, eps)
+        to_sum = - NB_loglikelihood(y, outputs, eps)
     
     elif model=='zinb':
-        pi = outputs[2]
-        to_sum = - ZINB_loglikelihood(mu, r, pi, y, eps)
+        # pi = outputs[2]
+        to_sum = - ZINB_loglikelihood(y, outputs, eps)
         
     total_loss = K.sum(to_sum, axis=-1)
         
@@ -492,7 +459,7 @@ def VAE_loss(y_true, outputs):
     if vae:
         #kl_loss = beta_vae * gaussian_kl_z(z_mean, z_log_var)
         zeros = tf.zeros(K.shape(z_mean))
-        kl_loss = beta_vae * gaussian_kl([z_mean, z_log_var], [zeros, zeros])
+        kl_loss = beta_vae * K.sum(gaussian_kl([z_mean, z_log_var], [zeros, zeros]), axis=-1)
         total_loss += kl_loss
         
         # KL loss for size factors
@@ -501,15 +468,14 @@ def VAE_loss(y_true, outputs):
             log_counts = np.log(adata.obs['n_counts'])
             
             # ones_shape = batch_size
-            ones_shape = K.shape(outputs[0])[0]
-            #ones_shape = K.shape(sf_mean)[0]
-            
+            # ones_shape = K.shape(outputs[0])[0]
+            ones_shape = K.shape(sf_mean)[0]
             ones = tf.ones((ones_shape, 1))
             
             m = np.mean(log_counts) * ones
             v = np.var(log_counts) * ones
             
-            sf_kl_loss = beta_vae * gaussian_kl([sf_mean, sf_log_var], [m, v])
+            sf_kl_loss = beta_vae * K.sum(gaussian_kl([sf_mean, sf_log_var], [m, v]), axis=-1)
             total_loss += sf_kl_loss
         
     return total_loss
@@ -526,10 +492,6 @@ opt = Adam(lr=lr, beta_1=beta_1, beta_2=beta_2)
 if model == 'gaussian':
     autoencoder.compile(optimizer=opt, loss='mse')
 else:
-    # autoencoder.compile(optimizer=opt,
-    #                     loss=VAE_loss(AE_outputs),
-    #                     loss_weights=loss_weights)
-
     autoencoder.add_loss(VAE_loss(AE_inputs, AE_outputs))
 
     autoencoder.compile(optimizer=opt,
@@ -567,7 +529,6 @@ loss = autoencoder.fit(fit_x, fit_y, epochs=epochs, batch_size=batch_size,
                        validation_data=(val_x, val_y))
 
 autoencoder.save('AE.h5')
-
 
 # =============================================================================
 # Plot loss
