@@ -81,9 +81,9 @@ lr = 0.0005 # Learning rate. Default = 0.001 (Adam default = 0.001)
 beta_1=0.75 # Default = 0.9 (Adam default = 0.9)
 beta_2=0.99 # Default = 0.999 (Adam default = 0.999)
 
-# Model strucure options:
+# Model structure options:
 use_sf = True # Use size factor in network
-learn_sf = True # Learn size factor using (V)AE network, else input values
+learn_sf = False # Learn size factor using (V)AE network, else input values
 model = 'zinb' # Use zero-inflated negative binomial dist
 #model = 'nb' # negative binomial dist
 #model = 'gaussian' # likelihood of (input) data conditioned on Gaussian model => mse loss
@@ -373,23 +373,21 @@ def build_sf_model(count_input, adata):
             sf = Dense(1, name='sf_latent')(x)
             sf_encoder = Model(count_input, sf, name='sf_encoder')
         
-        sf_input = None 
         plot_model(sf_encoder, to_file=models_dir + '/' + model + '_sf_encoder.png',
                show_shapes=True, show_layer_names=True)
     
     else:
-        sf_input = Input(shape=(1,), name='size_factor_input')
-        sf_encoder = None
-        sf = None
+        sf = Input(shape=(1,), name='size_factor_input')
+        sf_encoder = sf
     
-    return sf_input, sf_encoder, sf
+    return sf_encoder, sf
 
 
 # =============================================================================
 # Decoder Model 
 # =============================================================================
 
-def build_decoder(input_dim, count_input, sf_input, sf):
+def build_decoder(input_dim, count_input, sf):
 
     # Lossy reconstruction of the input
     lat_input = Input(shape=(latent_dim,))
@@ -420,7 +418,7 @@ def build_decoder(input_dim, count_input, sf_input, sf):
         if learn_sf:
             decoder_inputs = [lat_input, count_input]
         else:
-            decoder_inputs = [lat_input, sf_input]
+            decoder_inputs = [lat_input, sf]
     else:
         decoder_inputs = lat_input
     
@@ -441,7 +439,7 @@ def build_decoder(input_dim, count_input, sf_input, sf):
         # Decoder outputs
         if use_sf:
             sfAct = Lambda(lambda a: K.exp(a), name = 'expzsf') 
-            sf = sfAct(sf) if learn_sf else sfAct(sf_input)
+            sf = sfAct(sf)
             mu_sf = multiply([mu, sf]) # Uses broadcasting
             
             decoder_outputs = [mu_sf, disp]
@@ -467,7 +465,7 @@ def build_decoder(input_dim, count_input, sf_input, sf):
 # =============================================================================
 
 # Connect encoder and decoder models 
-def build_autoencoder(count_input, encoder, decoder, sf_input):
+def build_autoencoder(count_input, encoder, decoder, sf):
 
     if use_sf:
         
@@ -483,13 +481,13 @@ def build_autoencoder(count_input, encoder, decoder, sf_input):
        
         else:
             
-            AE_inputs = [count_input, sf_input]
+            AE_inputs = [count_input, sf]
             y = AE_inputs[0]
             
             if vae:
-                AE_outputs = decoder([encoder(count_input)[2], sf_input])
+                AE_outputs = decoder([encoder(count_input)[2], sf])
             else:
-                AE_outputs = decoder([encoder(count_input), sf_input])
+                AE_outputs = decoder([encoder(count_input), sf])
             
     else:
         
@@ -643,12 +641,12 @@ def main():
     count_input, encoder = build_encoder(input_dim)
     
     if use_sf:
-        sf_input, sf_encoder, sf = build_sf_model(count_input, adata)
+        sf_encoder, sf = build_sf_model(count_input, adata)
     else:
-        sf_input, sf = None, None
-        
-    decoder = build_decoder(input_dim, count_input, sf_input, sf)
-    autoencoder = build_autoencoder(count_input, encoder, decoder, sf_input)
+        sf = None
+            
+    decoder = build_decoder(input_dim, count_input, sf)
+    autoencoder = build_autoencoder(count_input, encoder, decoder, sf)
     
     train_model(X_train, X_test, sf_train, sf_test, autoencoder)
     
