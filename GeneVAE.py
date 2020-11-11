@@ -61,14 +61,7 @@ for i in [plots_dir, models_dir]:
 
 latent_dim = 32 # Size of encoded representation
 
-train_size = 0.9 # Fraction of data used in training
-
-epochs = 5
-batch_size = 256
-
-beta_vae = 1 # Change constraint on latent capactity
-
-# Encoder (and symmetric decoder) model structure
+# Encoder (and symmetric decoder) model structure:
 gene_layers = 3 # Hidden layers between input and latent layers
 gene_nodes = 512 # Size of initial hidden layer
 gene_flat = False # Keep all hidden layers flat (else halve each layer)
@@ -76,14 +69,14 @@ gene_alpha = 0.2 # LeakyReLU alpha
 gene_momentum = 0.8 # BatchNorm momentum
 gene_dropout = 0.2 # Dropout rate
 
-# Size factor model structure 
+# Size factor model structure:
 sf_layers = 4 # Hidden layers between input and latent layers
 sf_nodes = 1024 # Size of initial hidden layer (half each layer)
 sf_alpha = 0.2 # LeakyReLU alpha
 momentum=sf_momentum = 0.8 # BatchNorm momentum
 sf_dropout = 0.2 # Dropout rate
 
-# Adam optimiser parameters
+# Adam optimiser parameters:
 lr = 0.0005 # Learning rate. Default = 0.001 (Adam default = 0.001)
 beta_1=0.75 # Default = 0.9 (Adam default = 0.9)
 beta_2=0.99 # Default = 0.999 (Adam default = 0.999)
@@ -95,6 +88,17 @@ model = 'zinb' # Use zero-inflated negative binomial dist
 #model = 'nb' # negative binomial dist
 #model = 'gaussian' # likelihood of (input) data conditioned on Gaussian model => mse loss
 vae = True # Make autoencoder variational
+
+beta_vae = 1 # Change constraint on latent capactity
+
+
+# =============================================================================
+# Training parameters
+# =============================================================================
+
+train_size = 0.9 # Fraction of data used in training
+epochs = 5
+batch_size = 512
 
 
 # =============================================================================
