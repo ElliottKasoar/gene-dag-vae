@@ -164,6 +164,15 @@ class NegativeLogLikelihoodLayer(Layer):
         self.ll = ll_func
         self.eps = eps # Prevent NaN loss values
         super(NegativeLogLikelihoodLayer, self).__init__()
+        
+    def get_config(self):
+
+        config = super().get_config().copy()
+        config.update({
+            'll_func': self.ll,
+            'eps': self.eps
+        })
+        return config
     
     def call(self, y, inputs):
         likelihood_params = inputs
@@ -182,6 +191,16 @@ class KLDivergenceLayer(Layer):
         self.kld = kld_func
         self.beta = beta_vae
         super(KLDivergenceLayer, self).__init__()
+        
+    def get_config(self):
+
+        config = super().get_config().copy()
+        config.update({
+            'kld_func': self.kld,
+            'beta_vae': self.beta
+        })
+        return config
+    
     
     def call(self, input, reference):
         loss = self.beta * K.sum(self.kld(input, reference), axis=-1)
@@ -629,15 +648,15 @@ def main():
     
     train_model(X_train, X_test, sf_train, sf_test, autoencoder)
     
-    loss = train_model(X_train, X_test, sf_train, sf_test, autoencoder)
-    plot_loss(loss)
+    # loss = train_model(X_train, X_test, sf_train, sf_test, autoencoder)
+    # plot_loss(loss)
     
-    test_model(adata, gene_scaler, encoder, decoder)
+    # test_model(adata, gene_scaler, encoder, decoder)
     
-    if use_sf:
-        test_sf(adata, sf_encoder)
+    # if use_sf:
+    #     test_sf(adata, sf_encoder)
     
-    test_AE(adata, X_train, encoder, decoder)
+    # test_AE(adata, X_train, encoder, decoder)
     
     
 if __name__ == '__main__':
