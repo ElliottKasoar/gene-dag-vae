@@ -54,7 +54,6 @@ from pathlib import Path
 for i in [plots_dir, models_dir]:
     Path(i).mkdir(parents=True, exist_ok=True)
 
-
 # =============================================================================
 # Model parameters
 # =============================================================================
@@ -83,14 +82,14 @@ beta_2=0.99 # Default = 0.999 (Adam default = 0.999)
 
 # Model structure options:
 use_sf = True # Use size factor in network
-learn_sf = False # Learn size factor using (V)AE network, else input values
+learn_sf = True # Learn size factor using (V)AE network, else input values
 model = 'zinb' # Use zero-inflated negative binomial dist
-#model = 'nb' # negative binomial dist
-#model = 'gaussian' # likelihood of (input) data conditioned on Gaussian model => mse loss
+#model = 'nb' # Use negative binomial dist
+#model = 'gaussian' # Use gaussian dist
+
 vae = True # Make autoencoder variational
 
-beta_vae = 1 # Change constraint on latent capactity
-
+beta_vae = 1 # Change constraint on latent capacity
 
 # =============================================================================
 # Training parameters
@@ -99,7 +98,6 @@ beta_vae = 1 # Change constraint on latent capactity
 train_size = 0.9 # Fraction of data used in training
 epochs = 5
 batch_size = 512
-
 
 # =============================================================================
 # Load data
@@ -135,7 +133,6 @@ def load_data():
     
     return adata, X_train, X_test, sf_train, sf_test, input_dim, gene_scaler
 
-
 # =============================================================================
 # Sampling
 # =============================================================================
@@ -151,36 +148,35 @@ def sampling(args):
                               mean=epsilon_mean, stddev=epsilon_std)
     return mean + K.exp(0.5 * log_var) * epsilon
 
-
 # =============================================================================
 # Custom Layers
 # =============================================================================
 
 # Calculate likelihood of the (input) data conditioned on a model and its params (likelihood_params)    
-class NegativeLogLikelihoodLayer(Layer):
+class ReconstructionLossLayer(Layer):
     
     '''Identity transform layer that adds
     negative log likelihood (reconstruction loss)
     to the objective'''
     
-    def __init__(self, ll_func, eps=1e-10):
+    def __init__(self, rl_func, eps=1e-10):
         #self.is_placeholder = True
-        self.ll = ll_func
+        self.rl = rl_func
         self.eps = eps # Prevent NaN loss values
-        super(NegativeLogLikelihoodLayer, self).__init__()
+        super(ReconstructionLossLayer, self).__init__()
         
     def get_config(self):
 
         config = super().get_config().copy()
         config.update({
-            'll_func': self.ll,
+            'rl_func': self.rl,
             'eps': self.eps
         })
         return config
     
     def call(self, y, inputs):
-        likelihood_params = inputs
-        loss = - K.sum(self.ll(y, likelihood_params, self.eps), axis=-1)
+        params = inputs
+        loss = - K.sum(self.rl(y, params, self.eps), axis=-1)
         self.add_loss(loss)
         return inputs
 
@@ -211,12 +207,17 @@ class KLDivergenceLayer(Layer):
         self.add_loss(loss)
         return input
 
-
 # =============================================================================
 # Custom losses
 # =============================================================================
 
-def NB_loglikelihood(y, params, eps=1e-10):
+# weights that maximise loglikelihood of Gaussian model equivalent to weights that minimise MSE
+# mu implicitly learned
+def MeanSquaredError(y, mu, eps):
+    mse = (y-mu)**2
+    return -mse
+
+def NB_loglikelihood(y, params, eps=1e-10):   
     
     mu = params[0]
     r = params[1]
@@ -279,7 +280,6 @@ def gaussian_kl(g1, g2):
     
     kl = - 0.5 * (1 - logvar_2 + logvar_1) + 0.5 * K.exp(- logvar_2) * ( K.exp(logvar_1) + K.square(mu_1 - mu_2) )
     return kl
-
 
 # =============================================================================
 # Encoder Model: count data
@@ -498,39 +498,38 @@ def build_autoencoder(count_input, encoder, decoder, sf):
             AE_outputs = decoder(encoder(count_input)[2])
         else:
             AE_outputs = decoder(encoder(count_input))
-            
-    if model == 'nb':
-        AE_outputs = NegativeLogLikelihoodLayer(NB_loglikelihood)(y, AE_outputs)
+     
+        
+    if model == 'gaussian':
+        AE_outputs = ReconstructionLossLayer(MeanSquaredError)(y, AE_outputs)
+    elif model == 'nb':
+        AE_outputs = ReconstructionLossLayer(NB_loglikelihood)(y, AE_outputs)
     elif model == 'zinb':
-        AE_outputs = NegativeLogLikelihoodLayer(ZINB_loglikelihood)(y, AE_outputs)
+        AE_outputs = ReconstructionLossLayer(ZINB_loglikelihood)(y, AE_outputs)
     
     autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
     
-    print (autoencoder.losses)
+    print ('losses:', autoencoder.losses)
     plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
                show_shapes=True, show_layer_names=True)         
     
     # =============================================================================
     
     # Loss function run thrice (once for each output) but only one used
-    if model == 'zinb':
-        loss_weights=[1., 0.0, 0.0]
+    if model == 'gaussian':
+        loss_weights=None
     elif model == 'nb':
         loss_weights=[1., 0.0]
-    
+    elif model == 'zinb':
+        loss_weights=[1., 0.0, 0.0]
+
     opt = Adam(lr=lr, beta_1=beta_1, beta_2=beta_2)
     
-    if model == 'gaussian':
-        autoencoder.compile(optimizer=opt, loss='mse')
-    else:
-        #autoencoder.add_loss(VAE_loss(AE_inputs, AE_outputs))
-    
-        autoencoder.compile(optimizer=opt,
-                            loss=None,
-                            loss_weights=loss_weights)
+    autoencoder.compile(optimizer=opt,
+                        loss=None,
+                        loss_weights=loss_weights)
 
     return autoencoder
-
 
 # =============================================================================
 # Train model
