@@ -82,10 +82,10 @@ beta_2=0.99 # Default = 0.999 (Adam default = 0.999)
 
 # Model structure options:
 use_sf = True # Use size factor in network
-learn_sf = True # Learn size factor using (V)AE network, else input values
-model = 'zinb' # Use zero-inflated negative binomial dist
+learn_sf = False # Learn size factor using (V)AE network, else input values
+#model = 'zinb' # Use zero-inflated negative binomial dist
 #model = 'nb' # Use negative binomial dist
-#model = 'gaussian' # Use gaussian dist
+model = 'gaussian' # Use gaussian dist
 
 vae = True # Make autoencoder variational
 
@@ -138,15 +138,15 @@ def load_data():
 # =============================================================================
 
 # Reparametrisation trick
-def sampling(args):
-    mean, log_var = args
-    epsilon_mean, epsilon_std = [0.0, 1.0]
+# def sampling(args):
+#     mean, log_var = args
+#     epsilon_mean, epsilon_std = [0.0, 1.0]
     
-    batch = K.shape(mean)[0]
-    dim = K.int_shape(mean)[1]
-    epsilon = K.random_normal(shape=(batch, dim),
-                              mean=epsilon_mean, stddev=epsilon_std)
-    return mean + K.exp(0.5 * log_var) * epsilon
+#     batch = K.shape(mean)[0]
+#     dim = K.int_shape(mean)[1]
+#     epsilon = K.random_normal(shape=(batch, dim),
+#                               mean=epsilon_mean, stddev=epsilon_std)
+#     return mean + K.exp(0.5 * log_var) * epsilon
 
 # =============================================================================
 # Custom Layers
@@ -201,11 +201,40 @@ class KLDivergenceLayer(Layer):
         })
         return config
     
-    
     def call(self, input, reference):
         loss = self.beta * K.sum(self.kld(input, reference), axis=-1)
         self.add_loss(loss)
         return input
+    
+    
+class SampleLayer(Layer):
+    
+    def __init__(self, output_dim):
+        self.output_dim = output_dim
+        super(SampleLayer, self).__init__()
+        
+    def get_config(self):
+        
+        config = super().get_config().copy()
+        config.update({
+            'output_dim': self.output_dim
+        })
+        return config
+    
+    def sampling(self, args):
+        mean, log_var = args
+        epsilon_mean, epsilon_std = [0.0, 1.0]
+        
+        batch = K.shape(mean)[0]
+        dim = K.int_shape(mean)[1]
+        epsilon = K.random_normal(shape=(batch, dim),
+                                  mean=epsilon_mean, stddev=epsilon_std)
+        return mean + K.exp(0.5 * log_var) * epsilon
+        
+    def call(self, params):
+        sample = Lambda(self.sampling, output_shape=(self.output_dim,))(params)
+        return sample
+
 
 # =============================================================================
 # Custom losses
@@ -317,7 +346,8 @@ def build_encoder(input_dim):
         zeros = tf.zeros(K.shape(z_mean))
         z_mean, z_log_var = KLDivergenceLayer(gaussian_kl, beta_vae)([z_mean, z_log_var], [zeros, zeros])
         
-        z = Lambda(sampling, output_shape=(latent_dim,))([z_mean, z_log_var])
+        #z = Lambda(sampling, output_shape=(latent_dim,))([z_mean, z_log_var])
+        z = SampleLayer(latent_dim)([z_mean, z_log_var])
         encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
     
     else:
@@ -366,7 +396,8 @@ def build_sf_model(count_input, adata):
             
             sf_mean, sf_log_var = KLDivergenceLayer(gaussian_kl, beta_vae)([sf_mean, sf_log_var], [m, v])
             
-            sf = Lambda(sampling, output_shape=(1,))([sf_mean, sf_log_var])
+            #sf = Lambda(sampling, output_shape=(1,))([sf_mean, sf_log_var])
+            sf = SampleLayer(1)([sf_mean, sf_log_var])
             sf_encoder = Model(count_input, [sf_mean, sf_log_var, sf], name='sf_encoder')
             
         else:
@@ -509,25 +540,26 @@ def build_autoencoder(count_input, encoder, decoder, sf):
     
     autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
     
-    print ('losses:', autoencoder.losses)
+    print (f'# losses = {len(autoencoder.losses)}: \n {autoencoder.losses} \n')
+    #print (*autoencoder.losses, sep='\n')
     plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
                show_shapes=True, show_layer_names=True)         
     
     # =============================================================================
     
     # Loss function run thrice (once for each output) but only one used
-    if model == 'gaussian':
-        loss_weights=None
-    elif model == 'nb':
-        loss_weights=[1., 0.0]
-    elif model == 'zinb':
-        loss_weights=[1., 0.0, 0.0]
+    # if model == 'gaussian':
+    #     loss_weights=None
+    # elif model == 'nb':
+    #     loss_weights=[1., 0.0]
+    # elif model == 'zinb':
+    #     loss_weights=[1., 0.0, 0.0]
 
     opt = Adam(lr=lr, beta_1=beta_1, beta_2=beta_2)
     
     autoencoder.compile(optimizer=opt,
                         loss=None,
-                        loss_weights=loss_weights)
+                        loss_weights=None)
 
     return autoencoder
 
