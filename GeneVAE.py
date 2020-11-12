@@ -55,49 +55,60 @@ for i in [plots_dir, models_dir]:
     Path(i).mkdir(parents=True, exist_ok=True)
 
 # =============================================================================
-# Model parameters
+# Parameters
 # =============================================================================
 
-latent_dim = 32 # Size of encoded representation
+def default_params():
+    
+    params = {
+    
+        # Encoder (and symmetric decoder) model structure:
+        'AE_params' : {
+            'latent_dim' : 32, # Size of encoded representation
+            'gene_layers' : 3, # Hidden layers between input and latent layers
+            'gene_nodes' : 512, # Size of initial hidden layer
+            'gene_flat' : False, # Keep all hidden layers flat (else halve each layer)
+            'gene_alpha' : 0.2, # LeakyReLU alpha
+            'gene_momentum' : 0.8, # BatchNorm momentum
+            'gene_dropout' : 0.2 # Dropout rate
+        },
+        
+        # Size factor model structure:
+        'sf_params' : {
+            'sf_layers' : 4, # Hidden layers between input and latent layers
+            'sf_nodes' : 1024, # Size of initial hidden layer (half each layer)
+            'sf_alpha' : 0.2, # LeakyReLU alpha
+            'sf_momentum' : 0.8, # BatchNorm momentum
+            'sf_dropout' : 0.2 # Dropout rate
+        },
+        
+        # Adam optimiser parameters:
+        'opt_params' : {
+            'lr' : 0.001, # Learning rate (Adam default : 0.001)
+            'beta_1' : 0.9, # (Adam default : 0.9)
+            'beta_2' : 0.999 # (Adam default : 0.999)
+        },
+        
+        # Model architecture options:
+        'arch_params' : {
+            'use_sf' : True, # Use size factor in network
+            'learn_sf' : True, # Learn size factor using (V)AE network, else input values
+            'model' : 'zinb', # Use zero-inflated negative binomial dist
+            # 'model' : 'nb', # Use negative binomial dist
+            # 'model' : 'gaussian', # Use gaussian dist
+            'vae' : True, # Make autoencoder variational
+            'beta_vae' : 1 # Change constraint on latent capacity
+        },
+        
+        'training_params' : {
+            'train_size' : 0.9, # Fraction of data used in training
+            'epochs' : 5,
+            'batch_size' : 512
+        }
+    }
+    
+    return params
 
-# Encoder (and symmetric decoder) model structure:
-gene_layers = 3 # Hidden layers between input and latent layers
-gene_nodes = 512 # Size of initial hidden layer
-gene_flat = False # Keep all hidden layers flat (else halve each layer)
-gene_alpha = 0.2 # LeakyReLU alpha
-gene_momentum = 0.8 # BatchNorm momentum
-gene_dropout = 0.2 # Dropout rate
-
-# Size factor model structure:
-sf_layers = 4 # Hidden layers between input and latent layers
-sf_nodes = 1024 # Size of initial hidden layer (half each layer)
-sf_alpha = 0.2 # LeakyReLU alpha
-momentum=sf_momentum = 0.8 # BatchNorm momentum
-sf_dropout = 0.2 # Dropout rate
-
-# Adam optimiser parameters:
-lr = 0.0005 # Learning rate. Default = 0.001 (Adam default = 0.001)
-beta_1=0.75 # Default = 0.9 (Adam default = 0.9)
-beta_2=0.99 # Default = 0.999 (Adam default = 0.999)
-
-# Model structure options:
-use_sf = True # Use size factor in network
-learn_sf = False # Learn size factor using (V)AE network, else input values
-#model = 'zinb' # Use zero-inflated negative binomial dist
-#model = 'nb' # Use negative binomial dist
-model = 'gaussian' # Use gaussian dist
-
-vae = True # Make autoencoder variational
-
-beta_vae = 1 # Change constraint on latent capacity
-
-# =============================================================================
-# Training parameters
-# =============================================================================
-
-train_size = 0.9 # Fraction of data used in training
-epochs = 5
-batch_size = 512
 
 # =============================================================================
 # Load data
@@ -105,7 +116,7 @@ batch_size = 512
 
 # Loads data from preprocessed file
 # Performs limited further processing - scale and split into train/test data
-def load_data():
+def load_data(train_size):
     
     adata = load_h5ad('preprocessed') # Need to add code to ensure this exists	
     
@@ -133,20 +144,6 @@ def load_data():
     
     return adata, X_train, X_test, sf_train, sf_test, input_dim, gene_scaler
 
-# =============================================================================
-# Sampling
-# =============================================================================
-
-# Reparametrisation trick
-# def sampling(args):
-#     mean, log_var = args
-#     epsilon_mean, epsilon_std = [0.0, 1.0]
-    
-#     batch = K.shape(mean)[0]
-#     dim = K.int_shape(mean)[1]
-#     epsilon = K.random_normal(shape=(batch, dim),
-#                               mean=epsilon_mean, stddev=epsilon_std)
-#     return mean + K.exp(0.5 * log_var) * epsilon
 
 # =============================================================================
 # Custom Layers
@@ -314,47 +311,47 @@ def gaussian_kl(g1, g2):
 # Encoder Model: count data
 # =============================================================================
 
-def build_encoder(input_dim):
+def build_encoder(input_dim, arch_params, AE_params):
     
     input_shape = (input_dim,)    
     
     count_input = Input(shape=input_shape, name='count_input')
-    x = Dense(gene_nodes)(count_input)
-    x = BatchNormalization(momentum=gene_momentum)(x)
-    x = LeakyReLU(gene_alpha)(x)
-    x = Dropout(gene_dropout)(x)
+    x = Dense(AE_params['gene_nodes'])(count_input)
+    x = BatchNormalization(momentum=AE_params['gene_momentum'])(x)
+    x = LeakyReLU(AE_params['gene_alpha'])(x)
+    x = Dropout(AE_params['gene_dropout'])(x)
     
-    for i in range(1, gene_layers):
+    for i in range(1, AE_params['gene_layers']):
         
-        if gene_flat:
-            nodes = gene_nodes
+        if AE_params['gene_flat']:
+            nodes = AE_params['gene_nodes']
         else:
-            nodes = gene_nodes // (2**i)
-            if nodes < latent_dim:
+            nodes = AE_params['gene_nodes'] // (2**i)
+            if nodes < AE_params['latent_dim']:
                 print("Warning: layer has fewer nodes than latent layer")
-                print(f'Layer nodes: {nodes}. Latent nodes: {latent_dim}')
+                print(f"Layer nodes: {nodes}. Latent nodes: {AE_params['latent_dim']}")
         
         x = Dense(nodes)(x)
-        x = BatchNormalization(momentum=gene_momentum)(x)
-        x = LeakyReLU(gene_alpha)(x)
-        x = Dropout(gene_dropout)(x)
+        x = BatchNormalization(momentum=AE_params['gene_momentum'])(x)
+        x = LeakyReLU(AE_params['gene_alpha'])(x)
+        x = Dropout(AE_params['gene_dropout'])(x)
     
-    if vae:
-        z_mean = Dense(latent_dim, name='latent_mean')(x)
-        z_log_var = Dense(latent_dim, name='latent_log_var')(x)
+    if arch_params['vae']:
+        z_mean = Dense(AE_params['latent_dim'], name='latent_mean')(x)
+        z_log_var = Dense(AE_params['latent_dim'], name='latent_log_var')(x)
         
         zeros = tf.zeros(K.shape(z_mean))
-        z_mean, z_log_var = KLDivergenceLayer(gaussian_kl, beta_vae)([z_mean, z_log_var], [zeros, zeros])
+        z_mean, z_log_var = KLDivergenceLayer(gaussian_kl, arch_params['beta_vae'])([z_mean, z_log_var], [zeros, zeros])
         
-        #z = Lambda(sampling, output_shape=(latent_dim,))([z_mean, z_log_var])
-        z = SampleLayer(latent_dim)([z_mean, z_log_var])
+        z = SampleLayer(AE_params['latent_dim'])([z_mean, z_log_var])
         encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
     
     else:
-        z = Dense(latent_dim, activation='relu', name='latent')(x)
+        z = Dense(AE_params['latent_dim'], activation='relu', name='latent')(x)
         encoder = Model(count_input, z, name='encoder')
     
-    plot_model(encoder, to_file=models_dir + '/' + model + '_encoder.png',
+    plot_model(encoder,
+               to_file=models_dir + '/' + arch_params['model'] + '_encoder.png',
                show_shapes=True, show_layer_names=True)
     
     return count_input, encoder
@@ -364,23 +361,23 @@ def build_encoder(input_dim):
 # Size factor model
 # =============================================================================
 
-def build_sf_model(count_input, adata):
+def build_sf_model(count_input, adata, arch_params, sf_params):
 
-    if learn_sf:
+    if arch_params['learn_sf']:
         
-        x = Dense(sf_nodes)(count_input)
-        x = BatchNormalization(momentum=sf_momentum)(x)
-        x = LeakyReLU(sf_alpha)(x)
-        x = Dropout(sf_dropout)(x)
+        x = Dense(sf_params['sf_nodes'])(count_input)
+        x = BatchNormalization(momentum=sf_params['sf_momentum'])(x)
+        x = LeakyReLU(sf_params['sf_alpha'])(x)
+        x = Dropout(sf_params['sf_dropout'])(x)
         
-        for i in range(1, sf_layers):
-            nodes = sf_nodes // (2**i)
+        for i in range(1, sf_params['sf_layers']):
+            nodes = sf_params['sf_nodes'] // (2**i)
             x = Dense(nodes)(x)
-            x = BatchNormalization(momentum=sf_momentum)(x)
-            x = LeakyReLU(sf_alpha)(x)
-            x = Dropout(sf_dropout)(x)
+            x = BatchNormalization(momentum=sf_params['sf_momentum'])(x)
+            x = LeakyReLU(sf_params['sf_alpha'])(x)
+            x = Dropout(sf_params['sf_dropout'])(x)
         
-        if vae:
+        if arch_params['vae']:
             sf_mean = Dense(1, name='sf_mean')(x)
             sf_log_var = Dense(1, name='sf_log_var')(x)
             
@@ -394,9 +391,8 @@ def build_sf_model(count_input, adata):
             m = np.mean(log_counts) * ones
             v = np.var(log_counts) * ones
             
-            sf_mean, sf_log_var = KLDivergenceLayer(gaussian_kl, beta_vae)([sf_mean, sf_log_var], [m, v])
+            sf_mean, sf_log_var = KLDivergenceLayer(gaussian_kl, arch_params['beta_vae'])([sf_mean, sf_log_var], [m, v])
             
-            #sf = Lambda(sampling, output_shape=(1,))([sf_mean, sf_log_var])
             sf = SampleLayer(1)([sf_mean, sf_log_var])
             sf_encoder = Model(count_input, [sf_mean, sf_log_var, sf], name='sf_encoder')
             
@@ -404,7 +400,7 @@ def build_sf_model(count_input, adata):
             sf = Dense(1, name='sf_latent')(x)
             sf_encoder = Model(count_input, sf, name='sf_encoder')
         
-        plot_model(sf_encoder, to_file=models_dir + '/' + model + '_sf_encoder.png',
+        plot_model(sf_encoder, to_file=models_dir + '/' + arch_params['model'] + '_sf_encoder.png',
                show_shapes=True, show_layer_names=True)
     
     else:
@@ -418,35 +414,35 @@ def build_sf_model(count_input, adata):
 # Decoder Model 
 # =============================================================================
 
-def build_decoder(input_dim, count_input, sf):
+def build_decoder(input_dim, count_input, sf, AE_params, arch_params):
 
     # Lossy reconstruction of the input
-    lat_input = Input(shape=(latent_dim,))
+    lat_input = Input(shape=(AE_params['latent_dim'],))
     
-    if gene_flat:
-        x = Dense(gene_nodes)(lat_input)
+    if AE_params['gene_flat']:
+        x = Dense(AE_params['gene_nodes'])(lat_input)
     else:
-        nodes = gene_nodes // (2 ** (gene_layers - 1))
+        nodes = AE_params['gene_nodes'] // (2 ** (AE_params['gene_layers'] - 1))
         x = Dense(nodes)(lat_input)
     
-    x = BatchNormalization(momentum=gene_momentum)(x)
-    x = LeakyReLU(gene_alpha)(x)
-    x = Dropout(gene_dropout)(x)
+    x = BatchNormalization(momentum=AE_params['gene_momentum'])(x)
+    x = LeakyReLU(AE_params['gene_alpha'])(x)
+    x = Dropout(AE_params['gene_dropout'])(x)
     
-    for i in range(1, gene_layers):
-        if gene_flat:
-            nodes = gene_nodes
+    for i in range(1, AE_params['gene_layers']):
+        if AE_params['gene_flat']:
+            nodes = AE_params['gene_nodes']
         else:
-            nodes = gene_nodes // (2 ** (gene_layers - (i+1)))
+            nodes = AE_params['gene_nodes'] // (2 ** (AE_params['gene_layers'] - (i+1)))
     
         x = Dense(nodes)(x)
-        x = BatchNormalization(momentum=gene_momentum)(x)
-        x = LeakyReLU(gene_alpha)(x)
-        x = Dropout(gene_dropout)(x)
+        x = BatchNormalization(momentum=AE_params['gene_momentum'])(x)
+        x = LeakyReLU(AE_params['gene_alpha'])(x)
+        x = Dropout(AE_params['gene_dropout'])(x)
     
     # Decoder inputs
-    if use_sf:
-        if learn_sf:
+    if arch_params['use_sf']:
+        if arch_params['learn_sf']:
             decoder_inputs = [lat_input, count_input]
         else:
             decoder_inputs = [lat_input, sf]
@@ -455,10 +451,10 @@ def build_decoder(input_dim, count_input, sf):
     
     # Decoder outputs
     
-    if model == 'gaussian': 
+    if arch_params['model'] == 'gaussian': 
         decoder_outputs = Dense(input_dim, activation='sigmoid')(x)
     
-    elif model == 'nb' or model == 'zinb':
+    elif arch_params['model'] == 'nb' or arch_params['model'] == 'zinb':
     
         # Must ensure all values positive since loss takes logs etc.
         MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
@@ -468,7 +464,7 @@ def build_decoder(input_dim, count_input, sf):
         disp = Dense(input_dim, activation = DispAct, name='disp')(x)
     
         # Decoder outputs
-        if use_sf:
+        if arch_params['use_sf']:
             sfAct = Lambda(lambda a: K.exp(a), name = 'expzsf') 
             sf = sfAct(sf)
             mu_sf = multiply([mu, sf]) # Uses broadcasting
@@ -477,7 +473,7 @@ def build_decoder(input_dim, count_input, sf):
         else:
             decoder_outputs = [mu, disp]
         
-        if model == 'zinb':
+        if arch_params['model'] == 'zinb':
             # Activation is sigmoid because values restricted to [0,1]
             pi = Dense(input_dim, activation = 'sigmoid', name='pi')(x)
             decoder_outputs.append(pi)    
@@ -485,7 +481,8 @@ def build_decoder(input_dim, count_input, sf):
     
     decoder = Model(decoder_inputs, decoder_outputs, name='decoder')
     
-    plot_model(decoder, to_file=models_dir + '/' + model + '_decoder.png',
+    plot_model(decoder,
+               to_file=models_dir + '/' + arch_params['model'] + '_decoder.png',
                show_shapes=True, show_layer_names=True)   
 
     return decoder      
@@ -496,16 +493,17 @@ def build_decoder(input_dim, count_input, sf):
 # =============================================================================
 
 # Connect encoder and decoder models 
-def build_autoencoder(count_input, encoder, decoder, sf):
+def build_autoencoder(count_input, encoder, decoder, sf, arch_params,
+                      opt_params):
 
-    if use_sf:
+    if arch_params['use_sf']:
         
-        if learn_sf:    
+        if arch_params['learn_sf']:    
             
             AE_inputs = count_input
             y = AE_inputs
             
-            if vae:
+            if arch_params['vae']:
                 AE_outputs = decoder([encoder(count_input)[2], count_input])
             else:
                 AE_outputs = decoder([encoder(count_input), count_input])
@@ -515,7 +513,7 @@ def build_autoencoder(count_input, encoder, decoder, sf):
             AE_inputs = [count_input, sf]
             y = AE_inputs[0]
             
-            if vae:
+            if arch_params['vae']:
                 AE_outputs = decoder([encoder(count_input)[2], sf])
             else:
                 AE_outputs = decoder([encoder(count_input), sf])
@@ -525,37 +523,39 @@ def build_autoencoder(count_input, encoder, decoder, sf):
         AE_inputs = count_input
         y = AE_inputs
         
-        if vae:
+        if arch_params['vae']:
             AE_outputs = decoder(encoder(count_input)[2])
         else:
             AE_outputs = decoder(encoder(count_input))
      
         
-    if model == 'gaussian':
+    if arch_params['model'] == 'gaussian':
         AE_outputs = ReconstructionLossLayer(MeanSquaredError)(y, AE_outputs)
-    elif model == 'nb':
+    elif arch_params['model'] == 'nb':
         AE_outputs = ReconstructionLossLayer(NB_loglikelihood)(y, AE_outputs)
-    elif model == 'zinb':
+    elif arch_params['model'] == 'zinb':
         AE_outputs = ReconstructionLossLayer(ZINB_loglikelihood)(y, AE_outputs)
     
     autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
     
     print (f'# losses = {len(autoencoder.losses)}: \n {autoencoder.losses} \n')
     #print (*autoencoder.losses, sep='\n')
-    plot_model(autoencoder, to_file=models_dir + '/' + model + '_autoencoder.png',
+    plot_model(autoencoder, to_file=models_dir + '/' + arch_params['model'] + '_autoencoder.png',
                show_shapes=True, show_layer_names=True)         
     
     # =============================================================================
     
     # Loss function run thrice (once for each output) but only one used
-    # if model == 'gaussian':
+    # if arch_params['model'] == 'gaussian':
     #     loss_weights=None
-    # elif model == 'nb':
+    # elif arch_params['model'] == 'nb':
     #     loss_weights=[1., 0.0]
-    # elif model == 'zinb':
+    # elif arch_params['model'] == 'zinb':
     #     loss_weights=[1., 0.0, 0.0]
 
-    opt = Adam(lr=lr, beta_1=beta_1, beta_2=beta_2)
+    opt = Adam(lr=opt_params['lr'],
+               beta_1=opt_params['beta_1'],
+               beta_2=opt_params['beta_2'])
     
     autoencoder.compile(optimizer=opt,
                         loss=None,
@@ -567,30 +567,32 @@ def build_autoencoder(count_input, encoder, decoder, sf):
 # Train model
 # =============================================================================
 
-def train_model(X_train, X_test, sf_train, sf_test, autoencoder):
+def train_model(X_train, X_test, sf_train, sf_test, autoencoder, arch_params,
+                training_params):
 
     # from tb_callback import MyTensorBoard
     tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
     
-    if use_sf and not learn_sf:
+    if arch_params['use_sf'] and not arch_params['learn_sf']:
         fit_x = [X_train, sf_train]
         val_x = [X_test, sf_test]
     else:
         fit_x = X_train
         val_x = X_test
         
-    if model == 'gaussian':
+    if arch_params['model'] == 'gaussian':
         fit_y = X_train
         val_y = X_test
-    elif model == 'nb':
+    elif arch_params['model'] == 'nb':
         fit_y = [X_train, X_train]
         val_y = [X_test, X_test]
-    elif model == 'zinb':
+    elif arch_params['model'] == 'zinb':
         fit_y = [X_train, X_train, X_train]
         val_y = [X_test, X_test, X_test]
     
     # Pass adata.obs['sf'] as an input. 2nd, 3rd elements of y not used
-    loss = autoencoder.fit(fit_x, fit_y, epochs=epochs, batch_size=batch_size,
+    loss = autoencoder.fit(fit_x, fit_y, epochs=training_params['epochs'],
+                           batch_size=training_params['batch_size'],
                            shuffle=False, callbacks=[tensorboard],
                            validation_data=(val_x, val_y))
     
@@ -613,15 +615,15 @@ def plot_loss(loss):
 # Test model
 # =============================================================================
 
-def test_model(adata, gene_scaler, encoder, decoder):
+def test_model(adata, gene_scaler, encoder, decoder, arch_params):
     
-    if vae:
+    if arch_params['vae']:
         encoded_data = encoder.predict(adata.X)[0]
     else:
         encoded_data = encoder.predict(adata.X)
     
-    if use_sf:
-        if learn_sf:
+    if arch_params['use_sf']:
+        if arch_params['learn_sf']:
             decoded_data = decoder.predict([encoded_data, adata.X])
         else:
             decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values])
@@ -633,9 +635,9 @@ def test_model(adata, gene_scaler, encoder, decoder):
     save_h5ad(adata, 'denoised')
 
 
-def test_sf(adata, sf_encoder):
+def test_sf(adata, sf_encoder, arch_params):
     
-    if learn_sf:
+    if arch_params['learn_sf']:
         sf = sf_encoder.predict(adata.X)
     else:
         sf = sf_encoder.predict(adata.obs['sf'].values)
@@ -643,18 +645,18 @@ def test_sf(adata, sf_encoder):
     return sf
 
 
-def test_AE(adata, X_train, encoder, decoder):
+def test_AE(adata, X_train, encoder, decoder, arch_params, training_params):
     
-    if vae:
-        encoded_data = encoder.predict(X_train[0:batch_size])[0]
+    if arch_params['vae']:
+        encoded_data = encoder.predict(X_train[0:training_params['batch_size']])[0]
     else:
-        encoded_data = encoder.predict(X_train[0:batch_size])
+        encoded_data = encoder.predict(X_train[0:training_params['batch_size']])
     
-    if use_sf:
-        if learn_sf:
-            decoded_data = decoder.predict([encoded_data, X_train[0:batch_size]])
+    if arch_params['use_sf']:
+        if arch_params['learn_sf']:
+            decoded_data = decoder.predict([encoded_data, X_train[0:training_params['batch_size']]])
         else:            
-            decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values[0:batch_size]])
+            decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values[0:training_params['batch_size']]])
     else:
         decoded_data = decoder.predict(encoded_data)
     
@@ -667,29 +669,39 @@ def test_AE(adata, X_train, encoder, decoder):
 
 def main():
     
-    adata, X_train, X_test, sf_train, sf_test, input_dim, gene_scaler = load_data()
+    params = default_params()
     
-    count_input, encoder = build_encoder(input_dim)
+    adata, X_train, X_test, sf_train, sf_test, input_dim, gene_scaler = load_data(params['training_params']['train_size'])
     
-    if use_sf:
-        sf_encoder, sf = build_sf_model(count_input, adata)
+    count_input, encoder = build_encoder(input_dim, params['arch_params'],
+                                         params['AE_params'])
+    
+    if params['arch_params']['use_sf']:
+        sf_encoder, sf = build_sf_model(count_input, adata,
+                                        params['arch_params'],
+                                        params['sf_params'])
     else:
         sf = None
             
-    decoder = build_decoder(input_dim, count_input, sf)
-    autoencoder = build_autoencoder(count_input, encoder, decoder, sf)
+    decoder = build_decoder(input_dim, count_input, sf, params['AE_params'],
+                            params['arch_params'])
     
-    train_model(X_train, X_test, sf_train, sf_test, autoencoder)
+    autoencoder = build_autoencoder(count_input, encoder, decoder, sf,
+                                    params['arch_params'],
+                                    params['opt_params'])
     
-    # loss = train_model(X_train, X_test, sf_train, sf_test, autoencoder)
-    # plot_loss(loss)
+    loss = train_model(X_train, X_test, sf_train, sf_test, autoencoder,
+                params['arch_params'], params['training_params'])
     
-    # test_model(adata, gene_scaler, encoder, decoder)
+    plot_loss(loss)
+    
+    # test_model(adata, gene_scaler, encoder, decoder, params['arch_params'])
     
     # if use_sf:
-    #     test_sf(adata, sf_encoder)
+        # test_sf(adata, sf_encoder, params['arch_params'])
     
-    # test_AE(adata, X_train, encoder, decoder)
+    # test_AE(adata, X_train, encoder, decoder, params['arch_params'],
+    #         params['training_params'])
     
     
 if __name__ == '__main__':
