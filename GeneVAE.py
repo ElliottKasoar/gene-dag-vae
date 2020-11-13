@@ -29,16 +29,6 @@ from time import time
 # np.random.seed(1337)
 # tf.random.set_seed(1234)
 
-debug = False
-
-if debug:
-    from tensorflow.python import debug as tf_debug
-    sess = K.get_session()
-    # sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-    sess = tf_debug.LocalCLIDebugWrapperSession(sess, ui_type="readline") #Spyder
-    K.set_session(sess)
-
-
 if int(tf.__version__.startswith("2.")):
     tf2_flag = True
 else:
@@ -54,10 +44,12 @@ from pathlib import Path
 for i in [plots_dir, models_dir]:
     Path(i).mkdir(parents=True, exist_ok=True)
 
+
 # =============================================================================
 # Parameters
 # =============================================================================
 
+# Set default parameters. Also defines possible/necessary parameters reading in 
 def default_params():
     
     params = {
@@ -65,7 +57,7 @@ def default_params():
         # Encoder (and symmetric decoder) model structure:
         'AE_params' : {
             'latent_dim' : 32, # Size of encoded representation
-            'gene_layers' : 3, # Hidden layers between input and latent layers
+            'gene_layers' : 4, # Hidden layers between input and latent layers
             'gene_nodes' : 512, # Size of initial hidden layer
             'gene_flat' : False, # Keep all hidden layers flat (else halve each layer)
             'gene_alpha' : 0.2, # LeakyReLU alpha
@@ -75,8 +67,8 @@ def default_params():
         
         # Size factor model structure:
         'sf_params' : {
-            'sf_layers' : 4, # Hidden layers between input and latent layers
-            'sf_nodes' : 1024, # Size of initial hidden layer (half each layer)
+            'sf_layers' : 3, # Hidden layers between input and latent layers
+            'sf_nodes' : 512, # Size of initial hidden layer (half each layer)
             'sf_alpha' : 0.2, # LeakyReLU alpha
             'sf_momentum' : 0.8, # BatchNorm momentum
             'sf_dropout' : 0.2 # Dropout rate
@@ -104,9 +96,90 @@ def default_params():
             'train_size' : 0.9, # Fraction of data used in training
             'epochs' : 5,
             'batch_size' : 512
-        }
+        },
+        
+        'debugging_params' : {
+            'debug' : False
+            }
     }
     
+    return params
+
+
+# =============================================================================
+# Get and validate parameters
+# =============================================================================
+
+# Get parameters from defaults/input and validate
+def get_params(params=None):
+    
+    if params is None:
+        params = default_params()
+        
+    else:
+        
+        for param_type, value in params.items ():
+            assert param_type in default_params(), param_type + ' is not a valid group of keys'
+        
+        for param_type, value in default_params().items ():
+            
+            assert param_type in params, 'param should have the ' + param_type + ' group of keys'
+            
+            for key in params[param_type]:
+                assert key in default_params()[param_type], key + ' is not a valid key'
+            
+            for key in default_params()[param_type]:
+                assert key in params[param_type], 'param should have ' + key + ' key'
+        
+    
+    int_keys = ['latent_dim', 'gene_layers', 'gene_nodes', 'sf_layers',
+            'sf_nodes', 'epochs', 'batch_size']
+    
+    for key in int_keys:
+        for param_type in params:
+            
+            if key in params[param_type]:
+                val = params[param_type][key]
+                
+                if not isinstance(val, int):
+                        raise TypeError(f' {key} must be an integer.  Current value: {val}')
+                    
+                elif val < 1:
+                        raise ValueError(f' {key} must be greater than 0. Current value: {val}')
+    
+    
+    float_keys = ['gene_alpha', 'gene_momentum', 'gene_dropout', 'sf_alpha',
+            'sf_momentum', 'sf_dropout', 'lr', 'beta_1', 'beta_2', 'beta_vae',
+            'train_size']
+    
+    for key in float_keys:
+        for param_type in params:
+            
+            if key in params[param_type]:
+                val = params[param_type][key]
+                
+                if not isinstance(val, float) and not isinstance(val, int):
+                        raise TypeError(f' {key} must be a number.  Current value: {val}')
+                    
+                elif val < 0:
+                        raise ValueError(f' {key} must be greater than 0. Current value: {val}')    
+    
+    
+    bool_keys = ['gene_flat', 'use_sf', 'learn_sf', 'vae']
+    
+    for key in bool_keys:
+        for param_type in params:
+            
+            if key in params[param_type]:    
+                val = params[param_type][key]
+                
+                if not isinstance(val, bool):
+                    raise TypeError(f' {key} must be a boolean.  Current value: {val}')
+                    
+        
+    assert params['arch_params']['model'] in ['nb', 'zinb', 'gaussian'], "Model must be 'nb', 'zinb' or 'Guassian'"
+
+
     return params
 
 
@@ -669,7 +742,14 @@ def test_AE(adata, X_train, encoder, decoder, arch_params, training_params):
 
 def main():
     
-    params = default_params()
+    params = get_params()
+    
+    if params['debugging_params']['debug']:
+        from tensorflow.python import debug as tf_debug
+        sess = K.get_session()
+        # sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+        sess = tf_debug.LocalCLIDebugWrapperSession(sess, ui_type="readline") #Spyder
+        K.set_session(sess)
     
     adata, X_train, X_test, sf_train, sf_test, input_dim, gene_scaler = load_data(params['training_params']['train_size'])
     
