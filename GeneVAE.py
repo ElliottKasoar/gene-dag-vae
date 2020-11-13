@@ -53,7 +53,7 @@ for i in [plots_dir, models_dir]:
 def default_params():
     
     params = {
-    
+        
         # Encoder (and symmetric decoder) model structure:
         'AE_params' : {
             'latent_dim' : 32, # Size of encoded representation
@@ -130,7 +130,7 @@ def get_params(params=None):
             
             for key in default_params()[param_type]:
                 assert key in params[param_type], 'param should have ' + key + ' key'
-        
+    
     
     int_keys = ['latent_dim', 'gene_layers', 'gene_nodes', 'sf_layers',
             'sf_nodes', 'epochs', 'batch_size']
@@ -142,10 +142,10 @@ def get_params(params=None):
                 val = params[param_type][key]
                 
                 if not isinstance(val, int):
-                        raise TypeError(f' {key} must be an integer.  Current value: {val}')
+                    raise TypeError(f' {key} must be an integer.  Current value: {val}')
                     
                 elif val < 1:
-                        raise ValueError(f' {key} must be greater than 0. Current value: {val}')
+                    raise ValueError(f' {key} must be greater than 0. Current value: {val}')
     
     
     float_keys = ['gene_alpha', 'gene_momentum', 'gene_dropout', 'sf_alpha',
@@ -159,10 +159,10 @@ def get_params(params=None):
                 val = params[param_type][key]
                 
                 if not isinstance(val, float) and not isinstance(val, int):
-                        raise TypeError(f' {key} must be a number.  Current value: {val}')
+                    raise TypeError(f' {key} must be a number.  Current value: {val}')
                     
                 elif val < 0:
-                        raise ValueError(f' {key} must be greater than 0. Current value: {val}')    
+                    raise ValueError(f' {key} must be greater than 0. Current value: {val}')    
     
     
     bool_keys = ['gene_flat', 'use_sf', 'learn_sf', 'vae']
@@ -175,11 +175,13 @@ def get_params(params=None):
                 
                 if not isinstance(val, bool):
                     raise TypeError(f' {key} must be a boolean.  Current value: {val}')
-                    
-        
+    
+    
     assert params['arch_params']['model'] in ['nb', 'zinb', 'gaussian'], "Model must be 'nb', 'zinb' or 'Guassian'"
-
-
+    
+    if not params['arch_params']['use_sf']:
+        assert not params['arch_params']['learn_sf'], "'learn_sf must be False if 'use_sf' is False"
+    
     return params
 
 
