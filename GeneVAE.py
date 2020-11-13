@@ -180,7 +180,7 @@ def get_params(params=None):
     assert params['arch_params']['model'] in ['nb', 'zinb', 'gaussian'], "Model must be 'nb', 'zinb' or 'Guassian'"
     
     if not params['arch_params']['use_sf']:
-        assert not params['arch_params']['learn_sf'], "'learn_sf must be False if 'use_sf' is False"
+        assert not params['arch_params']['learn_sf'], "'learn_sf' must be False if 'use_sf' is False"
     
     return params
 
