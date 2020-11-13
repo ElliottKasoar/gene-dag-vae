@@ -152,3 +152,6 @@ plots/
 
 # Out files
 out
+
+# icloud
+*.icloud

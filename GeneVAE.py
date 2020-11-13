@@ -258,10 +258,12 @@ class KLDivergenceLayer(Layer):
     '''Identity transform layer that adds 
     KL divergence to the objective'''
     
-    def __init__(self, kld_func, beta_vae):
+    def __init__(self, kld_func, beta_vae, mean, log_var):
         #self.is_placeholder = True
         self.kld = kld_func
         self.beta = beta_vae
+        self.mean = mean
+        self.log_var = log_var
         super(KLDivergenceLayer, self).__init__()
         
     def get_config(self):
@@ -269,14 +271,22 @@ class KLDivergenceLayer(Layer):
         config = super().get_config().copy()
         config.update({
             'kld_func': self.kld,
-            'beta_vae': self.beta
+            'beta_vae': self.beta,
+            'mean': self.mean,
+            'log_var': self.log_var
         })
         return config
     
-    def call(self, input, reference):
-        loss = self.beta * K.sum(self.kld(input, reference), axis=-1)
+    def call(self, inputs):
+    
+        ones = tf.ones(K.shape(inputs[0]))
+        mean_tensor = tf.multiply(self.mean, ones)
+        log_var_tensor = tf.multiply(self.log_var, ones)
+        reference = [mean_tensor, log_var_tensor]
+        
+        loss = self.beta * K.sum(self.kld(inputs[0:2], reference), axis=-1)
         self.add_loss(loss)
-        return input
+        return inputs[2]
     
     
 class SampleLayer(Layer):
@@ -317,6 +327,7 @@ class SampleLayer(Layer):
 def MeanSquaredError(y, mu, eps):
     mse = (y-mu)**2
     return -mse
+
 
 def NB_loglikelihood(y, params, eps=1e-10):   
     
@@ -382,6 +393,7 @@ def gaussian_kl(g1, g2):
     kl = - 0.5 * (1 - logvar_2 + logvar_1) + 0.5 * K.exp(- logvar_2) * ( K.exp(logvar_1) + K.square(mu_1 - mu_2) )
     return kl
 
+
 # =============================================================================
 # Encoder Model: count data
 # =============================================================================
@@ -414,9 +426,6 @@ def build_encoder(input_dim, arch_params, AE_params):
     if arch_params['vae']:
         z_mean = Dense(AE_params['latent_dim'], name='latent_mean')(x)
         z_log_var = Dense(AE_params['latent_dim'], name='latent_log_var')(x)
-        
-        # zeros = tf.zeros(K.shape(z_mean))
-        # z_mean, z_log_var = KLDivergenceLayer(gaussian_kl, arch_params['beta_vae'])([z_mean, z_log_var], [zeros, zeros])
         
         z = SampleLayer(AE_params['latent_dim'])([z_mean, z_log_var])
         encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
@@ -455,19 +464,6 @@ def build_sf_model(count_input, adata, arch_params, sf_params):
         if arch_params['vae']:
             sf_mean = Dense(1, name='sf_mean')(x)
             sf_log_var = Dense(1, name='sf_log_var')(x)
-            
-            # # simply use all the data, rather than the data corresponding to the batch
-            # log_counts = np.log(adata.obs['n_counts'])
-            
-            # # ones_shape = batch_size
-            # ones_shape = K.shape(sf_mean)[0]
-            # ones = tf.ones((ones_shape, 1))
-            
-            # m = np.mean(log_counts) * ones
-            # v = np.var(log_counts) * ones
-            
-            # sf_mean, sf_log_var = KLDivergenceLayer(gaussian_kl, arch_params['beta_vae'])([sf_mean, sf_log_var], [m, v])
-            
             sf = SampleLayer(1)([sf_mean, sf_log_var])
             sf_encoder = Model(count_input, [sf_mean, sf_log_var, sf], name='sf_encoder')
             
@@ -477,19 +473,19 @@ def build_sf_model(count_input, adata, arch_params, sf_params):
         
         plot_model(sf_encoder, to_file=models_dir + '/' + arch_params['model'] + '_sf_encoder.png',
                show_shapes=True, show_layer_names=True)
-    
+        
     else:
-        sf = Input(shape=(1,), name='size_factor_input')
-        sf_encoder = sf
+        sf_encoder = Input(shape=(1,), name='size_factor_input')
     
-    return sf_encoder, sf
+    
+    return sf_encoder
 
 
 # =============================================================================
 # Decoder Model 
 # =============================================================================
 
-def build_decoder(input_dim, count_input, sf, AE_params, arch_params):
+def build_decoder(input_dim, count_input, AE_params, arch_params):
 
     # Lossy reconstruction of the input
     lat_input = Input(shape=(AE_params['latent_dim'],))
@@ -516,18 +512,11 @@ def build_decoder(input_dim, count_input, sf, AE_params, arch_params):
         x = Dropout(AE_params['gene_dropout'])(x)
     
     # Decoder inputs
-    if arch_params['use_sf']:
-        if arch_params['learn_sf']:
-            decoder_inputs = [lat_input, count_input]
-        else:
-            decoder_inputs = [lat_input, sf]
-    else:
-        decoder_inputs = lat_input
+    decoder_inputs = lat_input
     
     # Decoder outputs
-    
     if arch_params['model'] == 'gaussian': 
-        decoder_outputs = Dense(input_dim, activation='sigmoid')(x)
+        decoder_outputs = Dense(input_dim, activation='sigmoid', name='mu')(x)
     
     elif arch_params['model'] == 'nb' or arch_params['model'] == 'zinb':
     
@@ -538,21 +527,12 @@ def build_decoder(input_dim, count_input, sf, AE_params, arch_params):
         mu = Dense(input_dim, activation = MeanAct, name='mu')(x)
         disp = Dense(input_dim, activation = DispAct, name='disp')(x)
     
-        # Decoder outputs
-        if arch_params['use_sf']:
-            sfAct = Lambda(lambda a: K.exp(a), name = 'expzsf') 
-            sf = sfAct(sf)
-            mu_sf = multiply([mu, sf]) # Uses broadcasting
-            
-            decoder_outputs = [mu_sf, disp]
-        else:
-            decoder_outputs = [mu, disp]
+        decoder_outputs = [mu, disp]
         
         if arch_params['model'] == 'zinb':
             # Activation is sigmoid because values restricted to [0,1]
             pi = Dense(input_dim, activation = 'sigmoid', name='pi')(x)
             decoder_outputs.append(pi)    
-    
     
     decoder = Model(decoder_inputs, decoder_outputs, name='decoder')
     
@@ -568,107 +548,75 @@ def build_decoder(input_dim, count_input, sf, AE_params, arch_params):
 # =============================================================================
 
 # Connect encoder and decoder models 
-# def build_autoencoder(count_input, encoder, decoder, sf, arch_params,
-#                       opt_params):
-def build_autoencoder(count_input, adata, encoder, decoder, sf_encoder, sf, arch_params,
+def build_autoencoder(count_input, adata, encoder, decoder, sf_encoder, arch_params,
                       opt_params):
     
     # KL Loss (count data)
     if arch_params['vae']:
         z_mean, z_log_var, z = encoder(count_input)
-        
-        zeros = tf.zeros(K.shape(z_mean))
-        
-        # this loss is not being added to autoencoder.losses since z_mean, z_log_var not in autoencoder model
-        z_mean, z_log_var = KLDivergenceLayer(gaussian_kl, arch_params['beta_vae'])([z_mean, z_log_var], [zeros, zeros])
-    else:
-        pass
+        z = KLDivergenceLayer(gaussian_kl, arch_params['beta_vae'], 0., 0.)([z_mean, z_log_var, z])
     
+    else:
+        z = encoder(count_input)
+    
+    AE_outputs = decoder(z)
     
     if arch_params['use_sf']:
         
         if arch_params['learn_sf']:    
             
             AE_inputs = count_input
-            y = AE_inputs
-            
             
             if arch_params['vae']:
-                AE_outputs = decoder([encoder(count_input)[2], count_input])
-                #AE_outputs = decoder([z, count_input])         # if define z for vae=False, could replace all if vae-else statements with one line like this
-                
-                
-                # KL Loss (sf data)
-                # simply use all the data, rather than the data corresponding to the batch
+                                
+                # KL Loss (size factor data)
                 sf_mean, sf_log_var, sf = sf_encoder(count_input)
         
                 log_counts = np.log(adata.obs['n_counts'])
                 
-                # ones_shape = batch_size
-                ones_shape = K.shape(sf_mean)[0]
-                ones = tf.ones((ones_shape, 1))
+                m = np.float32(np.mean(log_counts))
+                v = np.float32(np.var(log_counts))
                 
-                m = np.mean(log_counts) * ones
-                v = np.var(log_counts) * ones
-                
-                # this loss is not being added to autoencoder.losses since sf_mean, sf_log_var not in autoencoder model
-                sf_mean, sf_log_var = KLDivergenceLayer(gaussian_kl, arch_params['beta_vae'])([sf_mean, sf_log_var], [m, v])
-                
+                sf = KLDivergenceLayer(gaussian_kl, arch_params['beta_vae'], m, v)([sf_mean, sf_log_var, sf])
             else:
-                AE_outputs = decoder([encoder(count_input), count_input])
-       
+                sf = sf_encoder(count_input)
+
         else:
-            
+            sf = sf_encoder
             AE_inputs = [count_input, sf]
-            y = AE_inputs[0]
-            
-            if arch_params['vae']:
-                AE_outputs = decoder([encoder(count_input)[2], sf])
-            else:
-                AE_outputs = decoder([encoder(count_input), sf])
+      
+        sfAct = Lambda(lambda a: K.exp(a), name = 'expzsf') 
+        sf = sfAct(sf)
+        
+        if arch_params['model'] == 'gaussian':
+            AE_outputs = multiply([AE_outputs, sf]) # Uses broadcasting
+        else:
+            AE_outputs[0] = multiply([AE_outputs[0], sf]) # Uses broadcasting
             
     else:
-        
         AE_inputs = count_input
-        y = AE_inputs
-        
-        if arch_params['vae']:
-            AE_outputs = decoder(encoder(count_input)[2])
-        else:
-            AE_outputs = decoder(encoder(count_input))
-     
-        
+    
+    
     if arch_params['model'] == 'gaussian':
-        AE_outputs = ReconstructionLossLayer(MeanSquaredError)(y, AE_outputs)
+        AE_outputs = ReconstructionLossLayer(MeanSquaredError)(count_input, AE_outputs)
     elif arch_params['model'] == 'nb':
-        AE_outputs = ReconstructionLossLayer(NB_loglikelihood)(y, AE_outputs)
+        AE_outputs = ReconstructionLossLayer(NB_loglikelihood)(count_input, AE_outputs)
     elif arch_params['model'] == 'zinb':
-        AE_outputs = ReconstructionLossLayer(ZINB_loglikelihood)(y, AE_outputs)
+        AE_outputs = ReconstructionLossLayer(ZINB_loglikelihood)(count_input, AE_outputs)
     
     autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
     
     print (f'# losses = {len(autoencoder.losses)}: \n {autoencoder.losses} \n')
-    #print (*autoencoder.losses, sep='\n')
     plot_model(autoencoder, to_file=models_dir + '/' + arch_params['model'] + '_autoencoder.png',
                show_shapes=True, show_layer_names=True)         
     
     # =============================================================================
     
-    # Loss function run thrice (once for each output) but only one used
-    # if arch_params['model'] == 'gaussian':
-    #     loss_weights=None
-    # elif arch_params['model'] == 'nb':
-    #     loss_weights=[1., 0.0]
-    # elif arch_params['model'] == 'zinb':
-    #     loss_weights=[1., 0.0, 0.0]
-
     opt = Adam(lr=opt_params['lr'],
                beta_1=opt_params['beta_1'],
                beta_2=opt_params['beta_2'])
     
-    autoencoder.compile(optimizer=opt,
-                        loss=None,
-                        loss_weights=None)
+    autoencoder.compile(optimizer=opt, loss=None)
 
     return autoencoder
 
@@ -793,16 +741,16 @@ def main():
                                          params['AE_params'])
     
     if params['arch_params']['use_sf']:
-        sf_encoder, sf = build_sf_model(count_input, adata,
+        sf_encoder = build_sf_model(count_input, adata,
                                         params['arch_params'],
                                         params['sf_params'])
     else:
-        sf = None
+        sf_encoder = None
             
-    decoder = build_decoder(input_dim, count_input, sf, params['AE_params'],
+    decoder = build_decoder(input_dim, count_input, params['AE_params'],
                             params['arch_params'])
     
-    autoencoder = build_autoencoder(count_input, adata, encoder, decoder, sf_encoder, sf,
+    autoencoder = build_autoencoder(count_input, adata, encoder, decoder, sf_encoder,
                                     params['arch_params'],
                                     params['opt_params'])
     
