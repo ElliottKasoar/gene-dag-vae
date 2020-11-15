@@ -248,7 +248,7 @@ class ReconstructionLossLayer(Layer):
     
     def call(self, y, inputs):
         params = inputs
-        loss = - K.sum(self.rl(y, params, self.eps), axis=-1)
+        loss = - K.mean(self.rl(y, params, self.eps), axis=-1)
         self.add_loss(loss)
         return inputs
 
@@ -258,9 +258,9 @@ class KLDivergenceLayer(Layer):
     '''Identity transform layer that adds 
     KL divergence to the objective'''
     
-    def __init__(self, kld_func, beta_vae, mean, log_var):
+    def __init__(self, beta_vae, mean, log_var):
         #self.is_placeholder = True
-        self.kld = kld_func
+        #self.kld = kld_func
         self.beta = beta_vae
         self.mean = mean
         self.log_var = log_var
@@ -270,21 +270,51 @@ class KLDivergenceLayer(Layer):
 
         config = super().get_config().copy()
         config.update({
-            'kld_func': self.kld,
             'beta_vae': self.beta,
             'mean': self.mean,
             'log_var': self.log_var
         })
         return config
     
-    def call(self, inputs):
+        
+    # https://github.com/tensorflow/probability/blob/master/tensorflow_probability/python/distributions/kullback_leibler.py
+    # KL divergence between 2 Gaussians, g1 and g2
+    # note: g1[1] (and g2[1]) are the stdev, not log variance
+    # def gaussian_kl(self, g1, g2):
+        
+    #     if tf2_flag:
+    #         import tensorflow_probability as tfp
+    #         ds = tfp.distributions
+    #     else:
+    #         ds = tf.contrib.distributions
+    #     g1 = ds.Normal(loc=g1[0], scale=g1[1])
+    #     g2 = ds.Normal(loc=g2[0], scale=g2[1])
+    #     kl = ds.kl_divergence(g1, g2)
+        
+    #     #return K.mean(kl, axis=-1)
+    #     return kl
     
+    
+    # KL divergence between 2 Gaussians
+    def gaussian_kl(self, g1, g2):
+        mu_1, logvar_1 = g1
+        mu_2, logvar_2 = g2
+        
+        kl = - 0.5 * (1 - logvar_2 + logvar_1) + 0.5 * K.exp(- logvar_2) * ( K.exp(logvar_1) + K.square(mu_1 - mu_2) )
+        return kl
+    
+    def create_reference(self, inputs):
         ones = tf.ones(K.shape(inputs[0]))
         mean_tensor = tf.multiply(self.mean, ones)
         log_var_tensor = tf.multiply(self.log_var, ones)
-        reference = [mean_tensor, log_var_tensor]
         
-        loss = self.beta * K.sum(self.kld(inputs[0:2], reference), axis=-1)
+        return [mean_tensor, log_var_tensor]
+    
+    def call(self, inputs):
+    
+        reference = self.create_reference(inputs)
+        
+        loss = self.beta * K.mean(self.gaussian_kl(inputs[0:2], reference), axis=-1)
         self.add_loss(loss)
         return inputs[2]
     
@@ -324,6 +354,7 @@ class SampleLayer(Layer):
 
 # weights that maximise loglikelihood of Gaussian model equivalent to weights that minimise MSE
 # mu implicitly learned
+# may be too small compared to KL divergences?
 def MeanSquaredError(y, mu, eps):
     mse = (y-mu)**2
     return -mse
@@ -367,42 +398,15 @@ def ZINB_loglikelihood(y, params, eps=1e-10):
     return zinb_log_likelihood
 
 
-# https://github.com/tensorflow/probability/blob/master/tensorflow_probability/python/distributions/kullback_leibler.py
-# KL divergence between 2 Gaussians, g1 and g2
-# note: g1[1] (and g2[1]) are the stdev, not log variance
-# def gaussian_kl(g1, g2):
-    
-#     if tf2_flag:
-#         import tensorflow_probability as tfp
-#         ds = tfp.distributions
-#     else:
-#         ds = tf.contrib.distributions
-#     g1 = ds.Normal(loc=g1[0], scale=g1[1])
-#     g2 = ds.Normal(loc=g2[0], scale=g2[1])
-#     kl = ds.kl_divergence(g1, g2)
-    
-#     #return K.sum(kl, axis=-1)
-#     return kl
-
-
-# KL divergence between 2 Gaussians
-def gaussian_kl(g1, g2):
-    mu_1, logvar_1 = g1
-    mu_2, logvar_2 = g2
-    
-    kl = - 0.5 * (1 - logvar_2 + logvar_1) + 0.5 * K.exp(- logvar_2) * ( K.exp(logvar_1) + K.square(mu_1 - mu_2) )
-    return kl
 
 
 # =============================================================================
 # Encoder Model: count data
 # =============================================================================
 
-def build_encoder(input_dim, arch_params, AE_params):
+# def build_encoder(input_dim, arch_params, AE_params):
+def build_encoder(count_input, arch_params, AE_params):
     
-    input_shape = (input_dim,)    
-    
-    count_input = Input(shape=input_shape, name='count_input')
     x = Dense(AE_params['gene_nodes'])(count_input)
     x = BatchNormalization(momentum=AE_params['gene_momentum'])(x)
     x = LeakyReLU(AE_params['gene_alpha'])(x)
@@ -438,7 +442,7 @@ def build_encoder(input_dim, arch_params, AE_params):
                to_file=models_dir + '/' + arch_params['model'] + '_encoder.png',
                show_shapes=True, show_layer_names=True)
     
-    return count_input, encoder
+    return encoder
 
 
 # =============================================================================
@@ -554,18 +558,17 @@ def build_autoencoder(count_input, adata, encoder, decoder, sf_encoder, arch_par
     # KL Loss (count data)
     if arch_params['vae']:
         z_mean, z_log_var, z = encoder(count_input)
-        z = KLDivergenceLayer(gaussian_kl, arch_params['beta_vae'], 0., 0.)([z_mean, z_log_var, z])
+        z = KLDivergenceLayer(arch_params['beta_vae'], 0., 0.)([z_mean, z_log_var, z])
     
     else:
         z = encoder(count_input)
     
+    AE_inputs = count_input
     AE_outputs = decoder(z)
     
     if arch_params['use_sf']:
         
         if arch_params['learn_sf']:    
-            
-            AE_inputs = count_input
             
             if arch_params['vae']:
                                 
@@ -577,13 +580,14 @@ def build_autoencoder(count_input, adata, encoder, decoder, sf_encoder, arch_par
                 m = np.float32(np.mean(log_counts))
                 v = np.float32(np.var(log_counts))
                 
-                sf = KLDivergenceLayer(gaussian_kl, arch_params['beta_vae'], m, v)([sf_mean, sf_log_var, sf])
+                sf = KLDivergenceLayer(arch_params['beta_vae'], m, v)([sf_mean, sf_log_var, sf])
             else:
                 sf = sf_encoder(count_input)
 
         else:
             sf = sf_encoder
-            AE_inputs = [count_input, sf]
+            AE_inputs = [AE_inputs]
+            AE_inputs.append(sf)
       
         sfAct = Lambda(lambda a: K.exp(a), name = 'expzsf') 
         sf = sfAct(sf)
@@ -594,7 +598,7 @@ def build_autoencoder(count_input, adata, encoder, decoder, sf_encoder, arch_par
             AE_outputs[0] = multiply([AE_outputs[0], sf]) # Uses broadcasting
             
     else:
-        AE_inputs = count_input
+        pass
     
     
     if arch_params['model'] == 'gaussian':
@@ -619,6 +623,35 @@ def build_autoencoder(count_input, adata, encoder, decoder, sf_encoder, arch_par
     autoencoder.compile(optimizer=opt, loss=None)
 
     return autoencoder
+
+
+# =============================================================================
+# Create Models
+# =============================================================================
+
+def create_models(input_dim, adata, params):
+    input_shape = (input_dim,)
+    count_input = Input(shape=input_shape, name='count_input')
+    
+    encoder = build_encoder(count_input, params['arch_params'],
+                                         params['AE_params'])
+    
+    if params['arch_params']['use_sf']:
+        sf_encoder = build_sf_model(count_input, adata,
+                                        params['arch_params'],
+                                        params['sf_params'])
+    else:
+        sf_encoder = None
+            
+    decoder = build_decoder(input_dim, count_input, params['AE_params'],
+                            params['arch_params'])
+    
+    autoencoder = build_autoencoder(count_input, adata, encoder, decoder, sf_encoder,
+                                    params['arch_params'],
+                                    params['opt_params'])
+    
+    return encoder, sf_encoder, decoder, autoencoder
+
 
 # =============================================================================
 # Train model
@@ -672,50 +705,54 @@ def plot_loss(loss):
 # Test model
 # =============================================================================
 
-def test_model(adata, gene_scaler, encoder, decoder, arch_params):
+def test_model(adata, gene_scaler, encoder, decoder, sf_encoder, arch_params):
     
     if arch_params['vae']:
-        encoded_data = encoder.predict(adata.X)[0]
+        encoded_data = encoder.predict(adata.X)[2]
     else:
         encoded_data = encoder.predict(adata.X)
     
-    if arch_params['use_sf']:
-        if arch_params['learn_sf']:
-            decoded_data = decoder.predict([encoded_data, adata.X])
-        else:
-            decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values])
-    else:
+    if arch_params['model'] == 'gaussian':
         decoded_data = decoder.predict(encoded_data)
+    else:
+        decoded_data = decoder.predict(encoded_data)[0]
     
-    adata.X = decoded_data[0]
-    adata.X = gene_scaler.inverse_transform(decoded_data[0])
+    if arch_params['use_sf']:
+        sf_data = test_sf(adata, sf_encoder, arch_params)
+        decoded_data = multiply([decoded_data, sf_data])
+    
+    adata.X = gene_scaler.inverse_transform(decoded_data)
     save_h5ad(adata, 'denoised')
-
+    
 
 def test_sf(adata, sf_encoder, arch_params):
     
     if arch_params['learn_sf']:
-        sf = sf_encoder.predict(adata.X)
+        if arch_params['vae']:
+            sf_data = sf_encoder.predict(adata.X)[2]
+        else:
+            sf_data = sf_encoder.predict(adata.X)
     else:
-        sf = sf_encoder.predict(adata.obs['sf'].values)
+        sf_data = adata.obs['sf'].values
     
-    return sf
+    return sf_data
 
 
-def test_AE(adata, X_train, encoder, decoder, arch_params, training_params):
+def test_AE(adata, X_train, encoder, decoder, sf_encoder, arch_params, training_params):
     
     if arch_params['vae']:
-        encoded_data = encoder.predict(X_train[0:training_params['batch_size']])[0]
+        encoded_data = encoder.predict(X_train[0:training_params['batch_size']])[2]
     else:
         encoded_data = encoder.predict(X_train[0:training_params['batch_size']])
     
-    if arch_params['use_sf']:
-        if arch_params['learn_sf']:
-            decoded_data = decoder.predict([encoded_data, X_train[0:training_params['batch_size']]])
-        else:            
-            decoded_data = decoder.predict([encoded_data, adata.obs['sf'].values[0:training_params['batch_size']]])
-    else:
+    if arch_params['model'] == 'gaussian':
         decoded_data = decoder.predict(encoded_data)
+    else:
+        decoded_data = decoder.predict(encoded_data)[0]
+        
+    if arch_params['use_sf']:
+        sf_data = test_sf(adata, sf_encoder, arch_params)[0:training_params['batch_size']]
+        decoded_data = multiply([decoded_data, sf_data])
     
     return decoded_data
 
@@ -737,35 +774,20 @@ def main():
     
     adata, X_train, X_test, sf_train, sf_test, input_dim, gene_scaler = load_data(params['training_params']['train_size'])
     
-    count_input, encoder = build_encoder(input_dim, params['arch_params'],
-                                         params['AE_params'])
-    
-    if params['arch_params']['use_sf']:
-        sf_encoder = build_sf_model(count_input, adata,
-                                        params['arch_params'],
-                                        params['sf_params'])
-    else:
-        sf_encoder = None
-            
-    decoder = build_decoder(input_dim, count_input, params['AE_params'],
-                            params['arch_params'])
-    
-    autoencoder = build_autoencoder(count_input, adata, encoder, decoder, sf_encoder,
-                                    params['arch_params'],
-                                    params['opt_params'])
+    encoder, sf_encoder, decoder, autoencoder = create_models(input_dim, adata, params)
     
     loss = train_model(X_train, X_test, sf_train, sf_test, autoencoder,
                 params['arch_params'], params['training_params'])
     
     plot_loss(loss)
     
-    # test_model(adata, gene_scaler, encoder, decoder, params['arch_params'])
+    test_model(adata, gene_scaler, encoder, decoder, sf_encoder, params['arch_params'])
     
-    # if use_sf:
-        # test_sf(adata, sf_encoder, params['arch_params'])
+    if params['arch_params']['use_sf']:
+        test_sf(adata, sf_encoder, params['arch_params'])
     
-    # test_AE(adata, X_train, encoder, decoder, params['arch_params'],
-    #         params['training_params'])
+    test_AE(adata, X_train, encoder, decoder, sf_encoder, params['arch_params'],
+            params['training_params'])
     
     
 if __name__ == '__main__':
