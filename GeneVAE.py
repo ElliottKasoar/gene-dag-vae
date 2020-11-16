@@ -89,7 +89,8 @@ def default_params():
             # 'model' : 'nb', # Use negative binomial dist
             # 'model' : 'gaussian', # Use gaussian dist
             'vae' : True, # Make autoencoder variational
-            'beta_vae' : 1 # Change constraint on latent capacity
+            'beta_vae_z' : 1, # Change constraint on latent capacity
+            'beta_vae_sf' : 1 # Change constraint on latent capacity
         },
         
         'training_params' : {
@@ -123,13 +124,16 @@ def get_params(params=None):
         
         for param_type, value in default_params().items ():
             
-            assert param_type in params, 'param should have the ' + param_type + ' group of keys'
+            #assert param_type in params, 'param should have the ' + param_type + ' group of keys'
+            if param_type not in params: params.update({param_type:value})
             
             for key in params[param_type]:
                 assert key in default_params()[param_type], key + ' is not a valid key'
             
-            for key in default_params()[param_type]:
-                assert key in params[param_type], 'param should have ' + key + ' key'
+            #for key in default_params()[param_type]:
+                #assert key in params[param_type], 'param should have ' + key + ' key'
+            for key, value in default_params()[param_type].items ():
+                if key not in params[param_type]: params[param_type].update({key:value})
     
     
     int_keys = ['latent_dim', 'gene_layers', 'gene_nodes', 'sf_layers',
@@ -149,8 +153,8 @@ def get_params(params=None):
     
     
     float_keys = ['gene_alpha', 'gene_momentum', 'gene_dropout', 'sf_alpha',
-            'sf_momentum', 'sf_dropout', 'lr', 'beta_1', 'beta_2', 'beta_vae',
-            'train_size']
+            'sf_momentum', 'sf_dropout', 'lr', 'beta_1', 'beta_2', 'beta_vae_z',
+            'beta_vae_sf', 'train_size']
     
     for key in float_keys:
         for param_type in params:
@@ -321,6 +325,8 @@ class KLDivergenceLayer(Layer):
     
 class SampleLayer(Layer):
     
+    '''Reparametrisation trick'''
+    
     def __init__(self, output_dim):
         self.output_dim = output_dim
         super(SampleLayer, self).__init__()
@@ -404,7 +410,6 @@ def ZINB_loglikelihood(y, params, eps=1e-10):
 # Encoder Model: count data
 # =============================================================================
 
-# def build_encoder(input_dim, arch_params, AE_params):
 def build_encoder(count_input, arch_params, AE_params):
     
     x = Dense(AE_params['gene_nodes'])(count_input)
@@ -558,7 +563,7 @@ def build_autoencoder(count_input, adata, encoder, decoder, sf_encoder, arch_par
     # KL Loss (count data)
     if arch_params['vae']:
         z_mean, z_log_var, z = encoder(count_input)
-        z = KLDivergenceLayer(arch_params['beta_vae'], 0., 0.)([z_mean, z_log_var, z])
+        z = KLDivergenceLayer(arch_params['beta_vae_z'], 0., 0.)([z_mean, z_log_var, z])
     
     else:
         z = encoder(count_input)
@@ -580,7 +585,7 @@ def build_autoencoder(count_input, adata, encoder, decoder, sf_encoder, arch_par
                 m = np.float32(np.mean(log_counts))
                 v = np.float32(np.var(log_counts))
                 
-                sf = KLDivergenceLayer(arch_params['beta_vae'], m, v)([sf_mean, sf_log_var, sf])
+                sf = KLDivergenceLayer(arch_params['beta_vae_sf'], m, v)([sf_mean, sf_log_var, sf])
             else:
                 sf = sf_encoder(count_input)
 
@@ -699,6 +704,8 @@ def plot_loss(loss):
     
     plt.plot(loss.history['loss'])
     plt.plot(loss.history['val_loss'])
+    
+    return plt
 
 
 # =============================================================================
@@ -762,8 +769,8 @@ def test_AE(adata, X_train, encoder, decoder, sf_encoder, arch_params, training_
 # =============================================================================
 
 def main():
-    
-    params = get_params()
+
+    params = get_params()   # default params
     
     if params['debugging_params']['debug']:
         from tensorflow.python import debug as tf_debug
@@ -779,7 +786,8 @@ def main():
     loss = train_model(X_train, X_test, sf_train, sf_test, autoencoder,
                 params['arch_params'], params['training_params'])
     
-    plot_loss(loss)
+    plt = plot_loss(loss)
+    save_figure ('loss', plt=plt)
     
     test_model(adata, gene_scaler, encoder, decoder, sf_encoder, params['arch_params'])
     
