@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# from load import save_h5ad, load_h5ad
+from load import save_h5ad, load_h5ad
 #from loss import NB_loglikelihood
 from temp import save_figure, plotTSNE
 
@@ -173,13 +173,12 @@ class TransMultA(Layer):
         
         self.A = self.add_weight(name='adj',
                                  shape=(self.n_nodes, self.n_nodes),
-                                 initializer='ones',
-                                 dtype='float64',
+                                 initializer='zeros',
                                  trainable=True)
     
     def call(self, x):
         
-        ident = K.eye(K.shape(self.A)[0], dtype='float64')
+        ident = tf.eye(K.shape(self.A)[0])
         I_A = ident - K.transpose(self.A)    
         output = tf.matmul(I_A, x)
         
@@ -191,7 +190,7 @@ class TransMultInvA(Layer):
     
     def __init__(self, n_nodes):
         self.n_nodes = n_nodes
-        super(TransMultA, self).__init__()
+        super(TransMultInvA, self).__init__()
         
         
     def get_config(self):
@@ -207,14 +206,13 @@ class TransMultInvA(Layer):
     def build(self, input_shape):
         
         self.A = self.add_weight(name='adj',
-                                 shape=(self.n_nodes, self.n_nodes),
-                                 initializer='ones',
-                                 dtype='float64',
-                                 trainable=True)
+                                  shape=(self.n_nodes, self.n_nodes),
+                                  initializer='zeros',
+                                  trainable=True)
     
     def call(self, x):
         
-        ident = K.eye(K.shape(self.A)[0], dtype='float64')
+        ident = tf.eye(K.shape(self.A)[0])
         I_A = ident - K.transpose(self.A)
         I_A_inv = tf.linalg.inv(I_A)
         
@@ -271,9 +269,58 @@ def ZINB_loglikelihood(y, params, eps=1e-10):
     zinb_log_likelihood = tf.where(tf.less(y, 1e-8), case_zero, case_nonzero)
     
     return zinb_log_likelihood
-
-
-tensor = tf.Variable(np.ones([2,2]))
-x = TransMultA(2)(tensor)
-print(x)
     
+
+# =============================================================================
+# Model
+# =============================================================================
+
+adata = load_h5ad('preprocessed') # Need to add code to ensure this exists	
+
+n_nodes = adata.X.shape[0]      # can change this to be batch size
+input_dim = adata.X.shape[1]
+latent_dim = 20
+
+input_shape = (input_dim,)
+
+# encoder
+count_input = Input(shape=input_shape, name='count_input')
+
+x = Dense(latent_dim)(count_input)
+z_mean = TransMultA(n_nodes)(x)
+z_log_var = TransMultA(n_nodes)(x)
+z = SampleLayer(latent_dim)([z_mean, z_log_var])
+
+encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
+plot_model(encoder, to_file=models_dir + '/' 'dag' + '_zinb' + '_encoder.png',
+               show_shapes=True, show_layer_names=True)         
+    
+
+# decoder
+lat_input = Input(shape=(latent_dim,))
+
+x = TransMultInvA(n_nodes)(lat_input)
+
+MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
+DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
+
+mu = Dense(input_dim, activation = MeanAct, name ='mu')(x)
+disp = Dense(input_dim, activation = DispAct, name ='disp')(x)
+pi = Dense(input_dim, activation = 'sigmoid', name='pi')(x)
+            
+decoder = Model(lat_input, [mu, disp, pi], name='decoder')
+plot_model(decoder, to_file=models_dir + '/' 'dag' + '_zinb' + '_decoder.png',
+               show_shapes=True, show_layer_names=True)    
+
+# autoencoder
+AE_inputs = count_input
+
+z_mean, z_log_var, z = encoder(count_input)
+z = KLDivergenceLayer(beta_vae=1, mean=0., log_var=0.)([z_mean, z_log_var, z])
+AE_outputs = decoder(z)
+AE_outputs = ReconstructionLossLayer(ZINB_loglikelihood)(count_input, AE_outputs)
+
+autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
+plot_model(autoencoder, to_file=models_dir + '/' 'dag' + '_zinb' + '_autoencoder.png',
+               show_shapes=True, show_layer_names=True)    
+
