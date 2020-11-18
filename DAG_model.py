@@ -4,6 +4,7 @@
 from load import save_h5ad, load_h5ad
 #from loss import NB_loglikelihood
 from temp import save_figure, plotTSNE
+from GeneVAE import load_data
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -73,7 +74,7 @@ class ReconstructionLossLayer(Layer):
         
         loss = - K.mean(self.rl(y, params, self.eps), axis=-1)
         self.add_loss(loss)
-        return inputs
+        return inputs[1]
 
 
 class KLDivergenceLayer(Layer):
@@ -281,10 +282,10 @@ def ZINB_loglikelihood(y, params, eps=1e-10):
 # Model
 # =============================================================================
 
-adata = load_h5ad('preprocessed') # Need to add code to ensure this exists	
+adata = load_h5ad('preprocessed')
 
-n_nodes = adata.X.shape[0]      # can change this to be batch size
 input_dim = adata.X.shape[1]
+n_nodes = adata.X.shape[0]      # can change this to be batch size
 latent_dim = 20
 
 input_shape = (input_dim,)
@@ -339,8 +340,32 @@ z_mean, z_log_var, z, A = encoder(count_input)
 
 z = KLDivergenceLayer(beta_vae=1, mean=0., log_var=0.)([z_mean, z_log_var, z])
 AE_outputs = decoder([z, A])
-AE_outputs[0] = ReconstructionLossLayer(ZINB_loglikelihood)([count_input, AE_outputs[0]])
+AE_outputs = ReconstructionLossLayer(ZINB_loglikelihood)([count_input, AE_outputs])
 
 autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
 plot_model(autoencoder, to_file=models_dir + '/' 'dag' + '_zinb' + '_autoencoder.png',
-               show_shapes=True, show_layer_names=True)    
+               show_shapes=True, show_layer_names=True)
+
+opt = Adam(lr=0.001,
+           beta_1=0.9,
+           beta_2=0.999)
+    
+autoencoder.compile(optimizer=opt, loss=None)
+
+# =============================================================================
+# Train model
+# =============================================================================
+
+tensorboard = TensorBoard(log_dir='logs/{}'.format(time()))
+
+X_train = adata.X
+
+fit_x = X_train
+fit_y = [X_train, X_train, X_train]
+
+loss = autoencoder.fit(fit_x, fit_y, epochs=5,
+                            batch_size=n_nodes,  # for now, pass in all data
+                            shuffle=False, callbacks=[tensorboard])
+    
+autoencoder.save('DAG_AE.h5')
+    
