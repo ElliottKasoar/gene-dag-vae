@@ -4,7 +4,6 @@
 from load import save_h5ad, load_h5ad
 #from loss import NB_loglikelihood
 from temp import save_figure, plotTSNE
-from GeneVAE import load_data
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -122,6 +121,51 @@ class KLDivergenceLayer(Layer):
         loss = self.beta * K.mean(self.gaussian_kl(inputs[0:2], reference), axis=-1)
         self.add_loss(loss)
         return inputs[2]
+
+
+# Layer to add loss associated with acyclicity constraint
+# lambda_A and penalty_A non-trainable as they are updated outside of fit
+class ConstraintLossLayer(Layer):
+
+    def __init__(self, cl_func):
+        #self.is_placeholder = True
+        self.cl = cl_func
+        super(ConstraintLossLayer, self).__init__()
+        
+    def get_config(self):
+
+        config = super().get_config().copy()
+        config.update({
+            'cl_func': self.cl,
+        })
+        return config
+    
+    
+    def build(self, input_shape):
+        
+        self.lambda_A = self.add_weight(name='lambda_A',
+                                 shape=(1),
+                                 initializer='zeros',
+                                 trainable=False)
+
+        self.penalty_A = self.add_weight(name='penalty_A',
+                                 shape=(1),
+                                 initializer='ones',
+                                 trainable=False)
+    
+    def call(self, inputs):
+        
+        A = inputs[0]
+        layers = inputs[1]
+        
+        # outputs = []
+        
+        # for layer in layers:
+        #     outputs.append(self.cl(layer, A, self.lambda_A, self.penalty_A))
+        
+        outputs = inputs[1]
+        
+        return outputs
 
 
 class SampleLayer(Layer):
@@ -342,6 +386,9 @@ z = KLDivergenceLayer(beta_vae=1, mean=0., log_var=0.)([z_mean, z_log_var, z])
 AE_outputs = decoder([z, A])
 AE_outputs = ReconstructionLossLayer(ZINB_loglikelihood)([count_input, AE_outputs])
 
+# Change function!
+AE_outputs = ConstraintLossLayer(ZINB_loglikelihood)([A, AE_outputs])
+
 autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
 plot_model(autoencoder, to_file=models_dir + '/' 'dag' + '_zinb' + '_autoencoder.png',
                show_shapes=True, show_layer_names=True)
@@ -363,9 +410,19 @@ X_train = adata.X
 fit_x = X_train
 fit_y = [X_train, X_train, X_train]
 
-loss = autoencoder.fit(fit_x, fit_y, epochs=5,
-                            batch_size=n_nodes,  # for now, pass in all data
-                            shuffle=False, callbacks=[tensorboard])
+# Loop
+for i in range(10):
+
+    loss = autoencoder.fit(fit_x, fit_y, epochs=5,
+                                batch_size=n_nodes,  # for now, pass in all data
+                                shuffle=False, callbacks=[tensorboard])
+    
+    # Update lambda_A and penalty_A (weights) from ConstraintLossLayer
+    x = autoencoder.get_layer(index=-1)
+    y = x.get_weights()
+    y[0] = y[0] + 1
+    y[1] = y[1] + 1
+    x.set_weights(y)
     
 autoencoder.save('DAG_AE.h5')
     
