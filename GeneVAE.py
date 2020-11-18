@@ -250,11 +250,14 @@ class ReconstructionLossLayer(Layer):
         })
         return config
     
-    def call(self, y, inputs):
-        params = inputs
+    def call(self, inputs):
+        
+        y = inputs[0]
+        params = inputs[1]
+        
         loss = - K.mean(self.rl(y, params, self.eps), axis=-1)
         self.add_loss(loss)
-        return inputs
+        return inputs[1]
 
 
 class KLDivergenceLayer(Layer):
@@ -607,11 +610,11 @@ def build_autoencoder(count_input, adata, encoder, decoder, sf_encoder, arch_par
     
     
     if arch_params['model'] == 'gaussian':
-        AE_outputs = ReconstructionLossLayer(MeanSquaredError)(count_input, AE_outputs)
+        AE_outputs = ReconstructionLossLayer(MeanSquaredError)([count_input, AE_outputs])
     elif arch_params['model'] == 'nb':
-        AE_outputs = ReconstructionLossLayer(NB_loglikelihood)(count_input, AE_outputs)
+        AE_outputs = ReconstructionLossLayer(NB_loglikelihood)([count_input, AE_outputs])
     elif arch_params['model'] == 'zinb':
-        AE_outputs = ReconstructionLossLayer(ZINB_loglikelihood)(count_input, AE_outputs)
+        AE_outputs = ReconstructionLossLayer(ZINB_loglikelihood)([count_input, AE_outputs])
     
     autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
     
