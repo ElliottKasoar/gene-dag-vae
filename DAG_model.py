@@ -66,8 +66,11 @@ class ReconstructionLossLayer(Layer):
         })
         return config
     
-    def call(self, y, inputs):
-        params = inputs
+    def call(self, inputs):
+        
+        y = inputs[0]
+        params = inputs[1]
+        
         loss = - K.mean(self.rl(y, params, self.eps), axis=-1)
         self.add_loss(loss)
         return inputs
@@ -180,17 +183,21 @@ class TransMultA(Layer):
         
         ident = tf.eye(K.shape(self.A)[0])
         I_A = ident - K.transpose(self.A)    
-        output = tf.matmul(I_A, x)
         
-        return output
+        outputs = []
+        
+        for layer in x:
+            outputs.append(tf.matmul(I_A, layer))
+                
+        return outputs, self.A
 
 
 # Multiplies layer with (I-A^T)^-1
-class TransMultInvA(Layer):
+class InvTransMultA(Layer):
     
     def __init__(self, n_nodes):
         self.n_nodes = n_nodes
-        super(TransMultInvA, self).__init__()
+        super(InvTransMultA, self).__init__()
         
         
     def get_config(self):
@@ -203,22 +210,21 @@ class TransMultInvA(Layer):
         return config
     
     
-    def build(self, input_shape):
-        
-        self.A = self.add_weight(name='adj',
-                                  shape=(self.n_nodes, self.n_nodes),
-                                  initializer='zeros',
-                                  trainable=True)
-    
     def call(self, x):
         
-        ident = tf.eye(K.shape(self.A)[0])
-        I_A = ident - K.transpose(self.A)
-        I_A_inv = tf.linalg.inv(I_A)
+        layers = x[:-1]
+        A = x[-1]
         
-        output = tf.matmul(I_A_inv, x)
+        ident = tf.eye(K.shape(A)[0])
+        I_A = ident - K.transpose(A)
+        inv_I_A = tf.linalg.inv(I_A)
         
-        return output
+        outputs = []
+        
+        for layer in layers:
+            outputs.append(tf.matmul(inv_I_A, layer))
+        
+        return outputs
 
 
 # =============================================================================
@@ -283,23 +289,33 @@ latent_dim = 20
 
 input_shape = (input_dim,)
 
-# encoder
+# =============================================================================
+# Encoder
+# =============================================================================
 count_input = Input(shape=input_shape, name='count_input')
 
-x = Dense(latent_dim)(count_input)
-z_mean = TransMultA(n_nodes)(x)
-z_log_var = TransMultA(n_nodes)(x)
+z_mean = Dense(latent_dim, name='z_mean')(count_input)
+z_log_var = Dense(latent_dim, name='z_log_var')(count_input)
+
+# A (weight matrix) shared by z_mean and z_log var, so single trainable matrix
+# Could pass each to same layer instead, but want to return A once only
+[z_mean, z_log_var], A = TransMultA(n_nodes)([z_mean, z_log_var])
+
 z = SampleLayer(latent_dim)([z_mean, z_log_var])
 
-encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
+encoder = Model(count_input, [z_mean, z_log_var, z, A], name='encoder')
 plot_model(encoder, to_file=models_dir + '/' 'dag' + '_zinb' + '_encoder.png',
                show_shapes=True, show_layer_names=True)         
     
 
-# decoder
-lat_input = Input(shape=(latent_dim,))
+# =============================================================================
+# Decoder
+# =============================================================================
 
-x = TransMultInvA(n_nodes)(lat_input)
+lat_input = Input(shape=(latent_dim,))
+A_input = Input(shape=(n_nodes))
+
+[x] = InvTransMultA(n_nodes)([lat_input, A_input])
 
 MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
 DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
@@ -307,20 +323,24 @@ DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
 mu = Dense(input_dim, activation = MeanAct, name ='mu')(x)
 disp = Dense(input_dim, activation = DispAct, name ='disp')(x)
 pi = Dense(input_dim, activation = 'sigmoid', name='pi')(x)
-            
-decoder = Model(lat_input, [mu, disp, pi], name='decoder')
+
+decoder = Model([lat_input, A_input], [mu, disp, pi], name='decoder')
 plot_model(decoder, to_file=models_dir + '/' 'dag' + '_zinb' + '_decoder.png',
                show_shapes=True, show_layer_names=True)    
 
-# autoencoder
+
+# =============================================================================
+# Autoencoder
+# =============================================================================
+
 AE_inputs = count_input
 
-z_mean, z_log_var, z = encoder(count_input)
+z_mean, z_log_var, z, A = encoder(count_input)
+
 z = KLDivergenceLayer(beta_vae=1, mean=0., log_var=0.)([z_mean, z_log_var, z])
-AE_outputs = decoder(z)
-AE_outputs = ReconstructionLossLayer(ZINB_loglikelihood)(count_input, AE_outputs)
+AE_outputs = decoder([z, A])
+AE_outputs[0] = ReconstructionLossLayer(ZINB_loglikelihood)([count_input, AE_outputs[0]])
 
 autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
 plot_model(autoencoder, to_file=models_dir + '/' 'dag' + '_zinb' + '_autoencoder.png',
                show_shapes=True, show_layer_names=True)    
-
