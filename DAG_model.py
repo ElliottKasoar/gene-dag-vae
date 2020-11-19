@@ -127,9 +127,10 @@ class KLDivergenceLayer(Layer):
 # lambda_A and penalty_A non-trainable as they are updated outside of fit
 class ConstraintLossLayer(Layer):
 
-    def __init__(self, cl_func):
+    def __init__(self, cl_func, alpha=1):
         #self.is_placeholder = True
         self.cl = cl_func
+        self.alpha = alpha
         super(ConstraintLossLayer, self).__init__()
         
     def get_config(self):
@@ -137,6 +138,7 @@ class ConstraintLossLayer(Layer):
         config = super().get_config().copy()
         config.update({
             'cl_func': self.cl,
+            'alpha': self.alpha
         })
         return config
     
@@ -158,14 +160,10 @@ class ConstraintLossLayer(Layer):
         A = inputs[0]
         layers = inputs[1]
         
-        # outputs = []
+        loss = self.cl(self.lambda_A, self.penalty_A, A, self.alpha)
+        self.add_loss(loss)
         
-        # for layer in layers:
-        #     outputs.append(self.cl(layer, A, self.lambda_A, self.penalty_A))
-        
-        outputs = inputs[1]
-        
-        return outputs
+        return layers
 
 
 class SampleLayer(Layer):
@@ -320,6 +318,32 @@ def ZINB_loglikelihood(y, params, eps=1e-10):
     zinb_log_likelihood = tf.where(tf.less(y, 1e-8), case_zero, case_nonzero)
     
     return zinb_log_likelihood
+
+
+def DAG_constraint(A, alpha):
+    
+    n_nodes = K.shape(A)[0]
+    
+    ident = tf.eye(n_nodes)
+    x = ident + alpha * tf.multiply(A, A)
+    
+    for i in range(n_nodes-1):
+        x = tf.matmul(x,x)
+    
+    h_A = tf.linalg.trace(x) - tf.cast(n_nodes, dtype='float32')
+    
+    return h_A
+
+def LagrangianLoss(lambda_A, penalty_A, A, alpha):
+    
+    n_nodes = K.shape(A)[0]
+    
+    h_A = DAG_constraint(A, alpha)
+    output = lambda_A * h_A + 0.5 * penalty_A * tf.pow(h_A, 2)
+    
+    output *= tf.ones(n_nodes)
+    
+    return output
     
 
 # =============================================================================
@@ -386,8 +410,7 @@ z = KLDivergenceLayer(beta_vae=1, mean=0., log_var=0.)([z_mean, z_log_var, z])
 AE_outputs = decoder([z, A])
 AE_outputs = ReconstructionLossLayer(ZINB_loglikelihood)([count_input, AE_outputs])
 
-# Change function!
-AE_outputs = ConstraintLossLayer(ZINB_loglikelihood)([A, AE_outputs])
+AE_outputs = ConstraintLossLayer(LagrangianLoss, (1/n_nodes))([A, AE_outputs])
 
 autoencoder = Model(AE_inputs, AE_outputs, name='autoencoder')
 plot_model(autoencoder, to_file=models_dir + '/' 'dag' + '_zinb' + '_autoencoder.png',
@@ -416,7 +439,7 @@ for i in range(10):
     loss = autoencoder.fit(fit_x, fit_y, epochs=5,
                                 batch_size=n_nodes,  # for now, pass in all data
                                 shuffle=False, callbacks=[tensorboard])
-    
+        
     # Update lambda_A and penalty_A (weights) from ConstraintLossLayer
     x = autoencoder.get_layer(index=-1)
     y = x.get_weights()
