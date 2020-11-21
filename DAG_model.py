@@ -72,6 +72,10 @@ class ReconstructionLossLayer(Layer):
         params = inputs[1]
         
         loss = - K.mean(self.rl(y, params, self.eps), axis=-1)
+        
+        # tf.print("Recon")
+        # tf.print(loss)
+        
         self.add_loss(loss)
         return inputs[1]
 
@@ -119,6 +123,10 @@ class KLDivergenceLayer(Layer):
         reference = self.create_reference(inputs)
         
         loss = self.beta * K.mean(self.gaussian_kl(inputs[0:2], reference), axis=-1)
+        
+        # tf.print("KL")
+        # tf.print(loss)
+        
         self.add_loss(loss)
         return inputs[2]
 
@@ -161,6 +169,10 @@ class ConstraintLossLayer(Layer):
         layers = inputs[1]
         
         loss = self.cl(self.lambda_A, self.penalty_A, A, self.alpha)
+        
+        # tf.print("Constraint")
+        # tf.print(loss)
+        
         self.add_loss(loss)
         
         return layers
@@ -219,7 +231,7 @@ class TransMultA(Layer):
         
         self.A = self.add_weight(name='adj',
                                  shape=(self.n_nodes, self.n_nodes),
-                                 initializer='zeros',
+                                 initializer='random_normal',
                                  trainable=True)
     
     def call(self, x):
@@ -320,25 +332,31 @@ def ZINB_loglikelihood(y, params, eps=1e-10):
     return zinb_log_likelihood
 
 
-def DAG_constraint(A, alpha):
+def get_h_A(A, alpha):
     
     n_nodes = K.shape(A)[0]
     
-    ident = tf.eye(n_nodes)
-    x = ident + alpha * tf.multiply(A, A)
+    ident = tf.eye(n_nodes, dtype='float64')
+
+    A = tf.cast(A, dtype='float64')
+
+    x = ident + alpha**2 * tf.multiply(A, A)
     
     for i in range(n_nodes-1):
         x = tf.matmul(x,x)
     
-    h_A = tf.linalg.trace(x) - tf.cast(n_nodes, dtype='float32')
+    h_A = tf.linalg.trace(x) - tf.cast(n_nodes, dtype='float64')
     
+    h_A = tf.cast(h_A, dtype='float32')
+        
     return h_A
+
 
 def LagrangianLoss(lambda_A, penalty_A, A, alpha):
     
     n_nodes = K.shape(A)[0]
     
-    h_A = DAG_constraint(A, alpha)
+    h_A = get_h_A(A, alpha)
     output = lambda_A * h_A + 0.5 * penalty_A * tf.pow(h_A, 2)
     
     output *= tf.ones(n_nodes)
@@ -352,15 +370,19 @@ def LagrangianLoss(lambda_A, penalty_A, A, alpha):
 
 adata = load_h5ad('preprocessed')
 
+adata = adata[adata.obs['clusters'].values == 'interneurons']
+
 input_dim = adata.X.shape[1]
 n_nodes = adata.X.shape[0]      # can change this to be batch size
-latent_dim = 20
+latent_dim = 100
 
 input_shape = (input_dim,)
+
 
 # =============================================================================
 # Encoder
 # =============================================================================
+
 count_input = Input(shape=input_shape, name='count_input')
 
 z_mean = Dense(latent_dim, name='z_mean')(count_input)
@@ -433,19 +455,79 @@ X_train = adata.X
 fit_x = X_train
 fit_y = [X_train, X_train, X_train]
 
-# Loop
-for i in range(10):
+h_A_old = np.inf
 
-    loss = autoencoder.fit(fit_x, fit_y, epochs=5,
+# Loop
+
+loss_list = []
+c_list = []
+h_list = []
+lambda_list = []
+
+for i in range(100):
+
+    loss = autoencoder.fit(fit_x, fit_y, epochs=10,
                                 batch_size=n_nodes,  # for now, pass in all data
                                 shuffle=False, callbacks=[tensorboard])
         
+    loss_list.append(loss)
+    
     # Update lambda_A and penalty_A (weights) from ConstraintLossLayer
+    
+    eta = 5 # assert > 1
+    gamma = 0.75 # assert < 1
+    
     x = autoencoder.get_layer(index=-1)
-    y = x.get_weights()
-    y[0] = y[0] + 1
-    y[1] = y[1] + 1
-    x.set_weights(y)
+    [lambda_A, penalty_A] = x.get_weights()
+    
+    h_A = get_h_A(A, 1/n_nodes)
+    tf.print(h_A)
+    
+    lambda_A += penalty_A * h_A
+    
+    if abs(h_A) > gamma * abs(h_A_old):
+        penalty_A = penalty_A * eta
+        
+    h_A_old = h_A
+    
+    x.set_weights([lambda_A, penalty_A])
+    
+    h_list.append(h_A)
+    c_list.append(penalty_A)
+    lambda_list.append(lambda_A)
+    
+    # print(A)
     
 autoencoder.save('DAG_AE.h5')
-    
+
+# plt.plot(loss.history['loss'])
+
+num = len(h_list)
+
+x1 = np.linspace(1, num*10, num*10)
+x2 = np.linspace(1, num*10, num)
+
+loss_vals = []
+
+for loss_hist in loss_list:
+    loss_vals += loss_hist.history['loss']
+
+fig1, ax1 = plt.subplots()
+ax1.set_xlabel("Epochs * loops")
+ax1.set_ylabel("log(loss)")
+ax1.plot(x1, np.log10(loss_vals))
+
+fig2, ax2 = plt.subplots()
+ax2.set_xlabel("Epochs * loops")
+ax2.set_ylabel("log10([h(A))")
+ax2.plot(x2, np.log10(h_list))
+
+fig3, ax3 = plt.subplots()
+ax3.set_xlabel("Epochs * loops")
+ax3.set_ylabel("log10(c)")
+ax3.plot(x2, np.log10(c_list))
+
+fig4, ax4 = plt.subplots()
+ax4.set_xlabel("Epochs * loops")
+ax4.set_ylabel("log10(lambda)")
+ax4.plot(x2, np.log10(lambda_list))
