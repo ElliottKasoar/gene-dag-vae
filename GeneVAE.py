@@ -16,7 +16,8 @@ import keras.backend as K
 from keras.utils import plot_model
 from keras.layers import Layer, Input, Dense, BatchNormalization, Dropout
 from keras.models import Model
-from keras import regularizers
+#from keras import regularizers
+from keras.regularizers import l1_l2
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers import multiply, Lambda
 from keras.optimizers import Adam
@@ -62,7 +63,9 @@ def default_params():
             'gene_flat' : False, # Keep all hidden layers flat (else halve each layer)
             'gene_alpha' : 0.2, # LeakyReLU alpha
             'gene_momentum' : 0.8, # BatchNorm momentum
-            'gene_dropout' : 0.2 # Dropout rate
+            'gene_dropout' : 0.2, # Dropout rate
+            'gene_regularizer' : l1_l2(l1=0, l2=0.2) # L1, L2 regularisation
+            # 'gene_regularizer' : None
         },
         
         # Size factor model structure:
@@ -71,7 +74,9 @@ def default_params():
             'sf_nodes' : 512, # Size of initial hidden layer (half each layer)
             'sf_alpha' : 0.2, # LeakyReLU alpha
             'sf_momentum' : 0.8, # BatchNorm momentum
-            'sf_dropout' : 0.2 # Dropout rate
+            'sf_dropout' : 0.2, # Dropout rate
+            'sf_regularizer' : l1_l2(l1=0, l2=0.2) # L1, L2 regularisation
+            # 'sf_regularizer' : None
         },
         
         # Adam optimiser parameters:
@@ -95,7 +100,7 @@ def default_params():
         
         'training_params' : {
             'train_size' : 0.9, # Fraction of data used in training
-            'epochs' : 5,
+            'epochs' : 10,
             'batch_size' : 512
         },
         
@@ -255,7 +260,7 @@ class ReconstructionLossLayer(Layer):
         y = inputs[0]
         params = inputs[1]
         
-        loss = - K.mean(self.rl(y, params, self.eps), axis=-1)
+        loss = - K.mean(self.rl(y, params, self.eps))
         self.add_loss(loss)
         return inputs[1]
 
@@ -321,7 +326,7 @@ class KLDivergenceLayer(Layer):
     
         reference = self.create_reference(inputs)
         
-        loss = self.beta * K.mean(self.gaussian_kl(inputs[0:2], reference), axis=-1)
+        loss = self.beta * K.mean(self.gaussian_kl(inputs[0:2], reference))
         self.add_loss(loss)
         return inputs[2]
     
@@ -415,7 +420,8 @@ def ZINB_loglikelihood(y, params, eps=1e-10):
 
 def build_encoder(count_input, arch_params, AE_params):
     
-    x = Dense(AE_params['gene_nodes'])(count_input)
+    x = Dense(AE_params['gene_nodes'], kernel_regularizer=None)(count_input)
+    #x = Dense(AE_params['gene_nodes'], kernel_regularizer=AE_params['gene_regularizer'])(count_input)
     x = BatchNormalization(momentum=AE_params['gene_momentum'])(x)
     x = LeakyReLU(AE_params['gene_alpha'])(x)
     x = Dropout(AE_params['gene_dropout'])(x)
@@ -430,20 +436,24 @@ def build_encoder(count_input, arch_params, AE_params):
                 print("Warning: layer has fewer nodes than latent layer")
                 print(f"Layer nodes: {nodes}. Latent nodes: {AE_params['latent_dim']}")
         
-        x = Dense(nodes)(x)
+        x = Dense(nodes, kernel_regularizer=None)(x)
+        #x = Dense(nodes, kernel_regularizer=AE_params['gene_regularizer'])(x)
         x = BatchNormalization(momentum=AE_params['gene_momentum'])(x)
         x = LeakyReLU(AE_params['gene_alpha'])(x)
         x = Dropout(AE_params['gene_dropout'])(x)
     
     if arch_params['vae']:
-        z_mean = Dense(AE_params['latent_dim'], name='latent_mean')(x)
-        z_log_var = Dense(AE_params['latent_dim'], name='latent_log_var')(x)
+        z_mean = Dense(AE_params['latent_dim'], kernel_regularizer=None, name='latent_mean')(x)
+        #z_mean = Dense(AE_params['latent_dim'], kernel_regularizer=AE_params['gene_regularizer'], name='latent_mean')(x)
+        z_log_var = Dense(AE_params['latent_dim'], kernel_regularizer=None, name='latent_log_var')(x)
+        #z_log_var = Dense(AE_params['latent_dim'], kernel_regularizer=AE_params['gene_regularizer'], name='latent_log_var')(x)
         
         z = SampleLayer(AE_params['latent_dim'])([z_mean, z_log_var])
         encoder = Model(count_input, [z_mean, z_log_var, z], name='encoder')
     
     else:
-        z = Dense(AE_params['latent_dim'], activation='relu', name='latent')(x)
+        z = Dense(AE_params['latent_dim'], activation='relu', kernel_regularizer=None, name='latent')(x)
+        #z = Dense(AE_params['latent_dim'], activation='relu', kernel_regularizer=AE_params['gene_regularizer'], name='latent')(x)
         encoder = Model(count_input, z, name='encoder')
     
     plot_model(encoder,
@@ -461,21 +471,25 @@ def build_sf_model(count_input, adata, arch_params, sf_params):
 
     if arch_params['learn_sf']:
         
-        x = Dense(sf_params['sf_nodes'])(count_input)
+        x = Dense(sf_params['sf_nodes'], kernel_regularizer=None)(count_input)
+        #x = Dense(sf_params['sf_nodes'], kernel_regularizer=sf_params['sf_regularizer'])(count_input)
         x = BatchNormalization(momentum=sf_params['sf_momentum'])(x)
         x = LeakyReLU(sf_params['sf_alpha'])(x)
         x = Dropout(sf_params['sf_dropout'])(x)
         
         for i in range(1, sf_params['sf_layers']):
             nodes = sf_params['sf_nodes'] // (2**i)
-            x = Dense(nodes)(x)
+            x = Dense(nodes, kernel_regularizer=None)(x)
+            #x = Dense(nodes, kernel_regularizer=sf_params['sf_regularizer'])(x)
             x = BatchNormalization(momentum=sf_params['sf_momentum'])(x)
             x = LeakyReLU(sf_params['sf_alpha'])(x)
             x = Dropout(sf_params['sf_dropout'])(x)
         
         if arch_params['vae']:
-            sf_mean = Dense(1, name='sf_mean')(x)
-            sf_log_var = Dense(1, name='sf_log_var')(x)
+            sf_mean = Dense(1, kernel_regularizer=None, name='sf_mean')(x)
+            #sf_mean = Dense(1, kernel_regularizer=sf_params['sf_regularizer'], name='sf_mean')(x)
+            sf_log_var = Dense(1, kernel_regularizer=None, name='sf_log_var')(x)
+            #sf_log_var = Dense(1, kernel_regularizer=sf_params['sf_regularizer'], name='sf_log_var')(x)
             sf = SampleLayer(1)([sf_mean, sf_log_var])
             sf_encoder = Model(count_input, [sf_mean, sf_log_var, sf], name='sf_encoder')
             
@@ -503,10 +517,12 @@ def build_decoder(input_dim, count_input, AE_params, arch_params):
     lat_input = Input(shape=(AE_params['latent_dim'],))
     
     if AE_params['gene_flat']:
-        x = Dense(AE_params['gene_nodes'])(lat_input)
+        x = Dense(AE_params['gene_nodes'], kernel_regularizer=None)(lat_input)
+        #x = Dense(AE_params['gene_nodes'], kernel_regularizer=AE_params['gene_regularizer'])(lat_input)
     else:
         nodes = AE_params['gene_nodes'] // (2 ** (AE_params['gene_layers'] - 1))
-        x = Dense(nodes)(lat_input)
+        x = Dense(nodes, kernel_regularizer=None)(lat_input)
+        #x = Dense(nodes, kernel_regularizer=AE_params['gene_regularizer'])(lat_input)
     
     x = BatchNormalization(momentum=AE_params['gene_momentum'])(x)
     x = LeakyReLU(AE_params['gene_alpha'])(x)
@@ -518,7 +534,8 @@ def build_decoder(input_dim, count_input, AE_params, arch_params):
         else:
             nodes = AE_params['gene_nodes'] // (2 ** (AE_params['gene_layers'] - (i+1)))
     
-        x = Dense(nodes)(x)
+        x = Dense(nodes, kernel_regularizer=None)(x)
+        #x = Dense(nodes, kernel_regularizer=AE_params['gene_regularizer'])(x)
         x = BatchNormalization(momentum=AE_params['gene_momentum'])(x)
         x = LeakyReLU(AE_params['gene_alpha'])(x)
         x = Dropout(AE_params['gene_dropout'])(x)
@@ -528,7 +545,7 @@ def build_decoder(input_dim, count_input, AE_params, arch_params):
     
     # Decoder outputs
     if arch_params['model'] == 'gaussian': 
-        decoder_outputs = Dense(input_dim, activation='sigmoid', name='mu')(x)
+        decoder_outputs = Dense(input_dim, activation='sigmoid', kernel_regularizer=AE_params['gene_regularizer'], name='mu')(x)
     
     elif arch_params['model'] == 'nb' or arch_params['model'] == 'zinb':
     
@@ -536,14 +553,14 @@ def build_decoder(input_dim, count_input, AE_params, arch_params):
         MeanAct = lambda a: tf.clip_by_value(K.exp(a), 1e-5, 1e6)
         DispAct = lambda a: tf.clip_by_value(tf.nn.softplus(a), 1e-4, 1e4)
     
-        mu = Dense(input_dim, activation = MeanAct, name='mu')(x)
-        disp = Dense(input_dim, activation = DispAct, name='disp')(x)
+        mu = Dense(input_dim, activation = MeanAct, kernel_regularizer=AE_params['gene_regularizer'], name='mu')(x)
+        disp = Dense(input_dim, kernel_regularizer=AE_params['gene_regularizer'], activation = DispAct, name='disp')(x)
     
         decoder_outputs = [mu, disp]
         
         if arch_params['model'] == 'zinb':
             # Activation is sigmoid because values restricted to [0,1]
-            pi = Dense(input_dim, activation = 'sigmoid', name='pi')(x)
+            pi = Dense(input_dim, activation = 'sigmoid', kernel_regularizer=AE_params['gene_regularizer'], name='pi')(x)
             decoder_outputs.append(pi)    
     
     decoder = Model(decoder_inputs, decoder_outputs, name='decoder')
@@ -576,7 +593,7 @@ def build_autoencoder(count_input, adata, encoder, decoder, sf_encoder, arch_par
     
     if arch_params['use_sf']:
         
-        if arch_params['learn_sf']:    
+        if arch_params['learn_sf']:
             
             if arch_params['vae']:
                                 
@@ -733,7 +750,6 @@ def test_model(adata, gene_scaler, encoder, decoder, sf_encoder, arch_params):
     
     adata.X = gene_scaler.inverse_transform(decoded_data)
     save_h5ad(adata, 'denoised')
-    
 
 def test_sf(adata, sf_encoder, arch_params):
     
@@ -743,7 +759,7 @@ def test_sf(adata, sf_encoder, arch_params):
         else:
             sf_data = sf_encoder.predict(adata.X)
     else:
-        sf_data = adata.obs['sf'].values
+        sf_data = np.float32(adata.obs['sf'].values)
     
     return sf_data
 
