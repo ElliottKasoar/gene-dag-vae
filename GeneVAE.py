@@ -58,13 +58,13 @@ def default_params():
         # Encoder (and symmetric decoder) model structure:
         'AE_params' : {
             'latent_dim' : 32, # Size of encoded representation
-            'gene_layers' : 4, # Hidden layers between input and latent layers
-            'gene_nodes' : 512, # Size of initial hidden layer
+            'gene_layers' : 7, # Hidden layers between input and latent layers
+            'gene_nodes' : 5000, # Size of initial hidden layer
             'gene_flat' : False, # Keep all hidden layers flat (else halve each layer)
             'gene_alpha' : 0.2, # LeakyReLU alpha
             'gene_momentum' : 0.8, # BatchNorm momentum
             'gene_dropout' : 0.2, # Dropout rate
-            'gene_regularizer' : l1_l2(l1=0, l2=0.2) # L1, L2 regularisation
+            'gene_regularizer' : l1_l2(l1=0, l2=0.3) # L1, L2 regularisation
             # 'gene_regularizer' : None
         },
         
@@ -93,15 +93,15 @@ def default_params():
             'model' : 'zinb', # Use zero-inflated negative binomial dist
             # 'model' : 'nb', # Use negative binomial dist
             # 'model' : 'gaussian', # Use gaussian dist
-            'vae' : True, # Make autoencoder variational
+            'vae' : False, # Make autoencoder variational
             'beta_vae_z' : 1, # Change constraint on latent capacity
             'beta_vae_sf' : 1 # Change constraint on latent capacity
         },
         
         'training_params' : {
             'train_size' : 0.9, # Fraction of data used in training
-            'epochs' : 10,
-            'batch_size' : 512
+            'epochs' : 8,
+            'batch_size' : 256
         },
         
         'debugging_params' : {
@@ -738,6 +738,37 @@ def test_model(adata, gene_scaler, encoder, decoder, sf_encoder, arch_params):
         encoded_data = encoder.predict(adata.X)[2]
     else:
         encoded_data = encoder.predict(adata.X)
+     
+    latent_dim = encoded_data.shape[-1]
+    
+    '''
+    encoded_adata = adata[:,:latent_dim].copy()
+    
+    del encoded_adata.var
+    import pandas as pd
+    encoded_adata.var = pd.DataFrame(index=range(latent_dim))
+    
+    for key in encoded_adata.obs.keys():
+        if key != 'clusters':
+            del encoded_adata.obs[key]
+        
+    encoded_adata.X = encoded_data
+    save_h5ad(encoded_adata, 'encoded')
+    '''
+    
+    # may be simpler to create new Anndata object
+    
+    import anndata as ad
+    import pandas as pd
+    
+    var = pd.DataFrame(index=range(latent_dim))
+    obs = pd.DataFrame()
+    obs['clusters'] = adata.obs['clusters'].values
+    #obs = pd.DataFrame(adata.obs['clusters'].values)
+    
+    encoded_adata = ad.AnnData(encoded_data, var=var, obs=obs)
+    save_h5ad(encoded_adata, 'encoded')
+    
     
     if arch_params['model'] == 'gaussian':
         decoded_data = decoder.predict(encoded_data)
