@@ -6,32 +6,11 @@ from load import save_h5ad, load_h5ad
 #from loss import NB_loglikelihood
 from temp import save_figure, plotTSNE
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def calculate_leiden_clusters(adata, stage='preprocessed', random_state=10,
             n_pcs=50, save_data=False):
-    
-    #plot_id = f'{stage}-{color}'
-    
-    # sc.tl.tsne(adata, use_rep='X', random_state=random_state, n_pcs=n_pcs)
-
-    # if color == 'clusters':
-    #     pass
-
-    # elif color == 'leiden':
-    #     sc.pp.neighbors(adata, use_rep='X', random_state=random_state,
-    #                     n_pcs=n_pcs)
-        
-    #     sc.tl.leiden(adata)
-    #     #groups = adata.obs[color]
-        
-        
-    # if plot_clusters == True:
-    #     # TSNE plot of data, points labelled with ground truth cluster    
-    #     plotTSNE(adata, color=[color], plot_id=plot_id)
-    # else:
-    #     pass
-
 
     sc.pp.neighbors(adata, use_rep='X', random_state=random_state,
                         n_pcs=n_pcs)
@@ -73,7 +52,7 @@ def cluster_accuracy(adata, stage='preprocessed', random_state=10,
     return accuracy_1, accuracy_2
 
 
-def plotGenesGroups(adata, stage='preprocessed', height=8, show=False):
+def plotGenesGroups(adata, stage='preprocessed', color = 'clusters', height=8, show=False):
 
     assert 'leiden' in adata.obs.keys().to_list(), 'must run calculate_leiden_clusters before clustering accuracy can be measured'
     
@@ -83,11 +62,12 @@ def plotGenesGroups(adata, stage='preprocessed', height=8, show=False):
     width = height*cols
     
     # Finding marker genes
-    sc.tl.rank_genes_groups(adata, groupby='leiden', method='wilcoxon', corr_method='bonferroni')
+    sc.tl.rank_genes_groups(adata, groupby=color, method='wilcoxon', corr_method='bonferroni')
     save_h5ad(adata, stage+'after_marker_genes')
     
     # need to stop sc.pl from showing plot!
     fig, ax = plt.subplots(1,cols,figsize=(width,height))
+    
     sc.pl.rank_genes_groups(adata,
                             n_genes=25,
                             sharey=False,
@@ -103,10 +83,10 @@ def plotGenesGroups(adata, stage='preprocessed', height=8, show=False):
     
     fig, ax = plt.subplots(1,cols,figsize=(width, height))
     sc.pl.rank_genes_groups_matrixplot(adata,
-                                        n_genes=25,
-                                        groupby='leiden',
+                                        #n_genes=25,
+                                        groupby=color,
                                         use_raw=False,
-                                        swap_axes=True,
+                                        swap_axes=False if stage=='encoded' else True,
                                         figsize=(30,50),
                                         dendrogram=False)
     
@@ -131,8 +111,15 @@ def analyse_clusters(stage='preprocessed', color='cluster'):
     acc1, acc2 = cluster_accuracy(adata, stage=stage, random_state=10,
                      n_pcs=50, save_data=False)
     print(acc1, '\n', acc2)
+    print(np.mean(acc1), np.std(acc1))
+    print(np.mean(acc2), np.std(acc2))
     
-    sc.tl.tsne(adata, use_rep='X', random_state=10, n_pcs=50)
+    if color == 'encoded':
+        sc.tl.tsne(adata, use_rep='X', random_state=10, n_pcs=50)
+    else:
+        sc.tl.pca(adata, return_info=False, use_highly_variable=False)
+        sc.tl.tsne(adata, use_rep='X_pca', random_state=10, n_pcs=50)
+        
     plot_id = f'{stage}-{color}'
     plotTSNE(adata, color=[color], plot_id=plot_id, show=True)
     
@@ -141,9 +128,11 @@ def analyse_clusters(stage='preprocessed', color='cluster'):
     
 def main():
     
-    stage = 'denoised'
+    stage = 'encoded'
+    #stage = 'denoised'
     #stage = 'preprocessed'
     color='clusters'
+    #color='leiden'
     
     analyse_clusters(stage=stage, color=color)
     
