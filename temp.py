@@ -281,9 +281,9 @@ def plotTSNE(adata, color, pointSize=150, height=8, palette=sns.color_palette("d
     plt.close(fig)
 
 def preprocessData(adata):
-    adata = adata[adata.obs.n_genes_expressed > 200, :]
-    adata = adata[:, adata.var['n_cells'] > 2]
-    adata = adata[adata.obs.n_genes_expressed < 2500, :]
+    # adata = adata[adata.obs.n_genes_expressed > 200, :]
+    # adata = adata[:, adata.var['n_cells'] > 2]
+    # adata = adata[adata.obs.n_genes_expressed < 2500, :]
     sc.pp.normalize_total(adata, target_sum=1e4)
     sc.pp.log1p(adata)    
 
